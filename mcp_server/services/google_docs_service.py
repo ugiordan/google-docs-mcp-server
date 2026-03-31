@@ -4,6 +4,7 @@ import time
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaInMemoryUpload
 
 from mcp_server.validation import sanitize_query
 
@@ -189,42 +190,28 @@ class GoogleDocsService:
         Returns:
             Dictionary with id, name, url, and updatedTime
         """
+        if mode == "replace":
+            self.clear_document(doc_id)
 
         def _update():
-            # Get current document to find endIndex
-            doc = self.docs_service.documents().get(documentId=doc_id).execute()
+            if mode == "append":
+                # Get current document to find endIndex
+                doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                end_index = 1
+                for item in doc.get("body", {}).get("content", []):
+                    if "endIndex" in item:
+                        end_index = item["endIndex"]
 
-            # Find the end index of the document
-            end_index = 1
-            for item in doc.get("body", {}).get("content", []):
-                if "endIndex" in item:
-                    end_index = item["endIndex"]
-
-            requests = []
-
-            if mode == "replace":
-                # Delete existing content, then insert new
-                if end_index > 1:
-                    requests.append(
-                        {
-                            "deleteContentRange": {
-                                "range": {"startIndex": 1, "endIndex": end_index - 1}
-                            }
-                        }
-                    )
-
-                requests.append(
-                    {"insertText": {"location": {"index": 1}, "text": content}}
-                )
-            else:  # append
-                requests.append(
+                requests = [
                     {
                         "insertText": {
                             "location": {"index": end_index - 1},
                             "text": content,
                         }
                     }
-                )
+                ]
+            else:  # replace (already cleared)
+                requests = [{"insertText": {"location": {"index": 1}, "text": content}}]
 
             self.docs_service.documents().batchUpdate(
                 documentId=doc_id, body={"requests": requests}
@@ -245,6 +232,78 @@ class GoogleDocsService:
             }
 
         return self._retry_on_429(_update)
+
+    def clear_document(self, doc_id):
+        """Clear all content from a document.
+
+        Args:
+            doc_id: The document ID
+
+        Returns:
+            The original endIndex before clearing
+        """
+
+        def _clear():
+            doc = self.docs_service.documents().get(documentId=doc_id).execute()
+
+            end_index = 1
+            for item in doc.get("body", {}).get("content", []):
+                if "endIndex" in item:
+                    end_index = item["endIndex"]
+
+            if end_index > 1:
+                requests = [
+                    {
+                        "deleteContentRange": {
+                            "range": {"startIndex": 1, "endIndex": end_index - 1}
+                        }
+                    }
+                ]
+                self.docs_service.documents().batchUpdate(
+                    documentId=doc_id, body={"requests": requests}
+                ).execute()
+
+            return end_index
+
+        return self._retry_on_429(_clear)
+
+    def upload_file(self, file_bytes, title, mime_type, folder_id=None):
+        """Upload a file and convert it to a Google Doc.
+
+        Args:
+            file_bytes: Raw file bytes
+            title: Document title
+            mime_type: Source file MIME type
+            folder_id: Optional target folder ID
+
+        Returns:
+            Dictionary with id, name, and url
+        """
+
+        def _upload():
+            body = {
+                "name": title,
+                "mimeType": "application/vnd.google-apps.document",
+            }
+
+            if folder_id:
+                body["parents"] = [folder_id]
+
+            media = MediaInMemoryUpload(file_bytes, mimetype=mime_type, resumable=True)
+
+            file_metadata = (
+                self.drive_service.files()
+                .create(body=body, media_body=media, fields="id,name")
+                .execute()
+            )
+
+            return {
+                "id": file_metadata["id"],
+                "name": file_metadata["name"],
+                "url": f"https://docs.google.com/document/d/{file_metadata['id']}/edit",
+            }
+
+        return self._retry_on_429(_upload)
 
     def comment_on_document(self, doc_id, comment, quoted_text=None):
         """Add a comment to a Google Doc.

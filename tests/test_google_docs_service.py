@@ -235,6 +235,81 @@ class TestCreateDocument:
         assert call_kwargs["body"]["parents"] == ["folder123"]
 
 
+class TestClearDocument:
+    """Tests for clear_document method."""
+
+    def test_clear_document_with_content(self, service, mock_docs_service):
+        """Test clearing a document that has content."""
+        mock_docs_service.documents().get().execute.return_value = {
+            "documentId": "doc123",
+            "body": {"content": [{"endIndex": 50}]},
+        }
+
+        result = service.clear_document("doc123")
+
+        call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
+        assert call_kwargs["documentId"] == "doc123"
+        requests = call_kwargs["body"]["requests"]
+        assert len(requests) == 1
+        assert requests[0]["deleteContentRange"]["range"]["startIndex"] == 1
+        assert requests[0]["deleteContentRange"]["range"]["endIndex"] == 49
+
+        assert result == 50
+
+    def test_clear_document_empty(self, service, mock_docs_service):
+        """Test clearing a document with no content (endIndex == 1)."""
+        mock_docs_service.documents().get().execute.return_value = {
+            "documentId": "doc123",
+            "body": {"content": [{"endIndex": 1}]},
+        }
+
+        result = service.clear_document("doc123")
+        assert result == 1
+
+
+class TestUploadFile:
+    """Tests for upload_file method."""
+
+    def test_upload_file_docx(self, service, mock_drive_service):
+        """Test uploading a .docx file."""
+        mock_drive_service.files().create().execute.return_value = {
+            "id": "uploaded123",
+            "name": "Uploaded Doc",
+        }
+
+        file_bytes = b"fake docx content"
+        mime_type = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+        result = service.upload_file(file_bytes, "Uploaded Doc", mime_type)
+
+        assert result["id"] == "uploaded123"
+        assert result["name"] == "Uploaded Doc"
+        assert result["url"] == "https://docs.google.com/document/d/uploaded123/edit"
+
+    def test_upload_file_with_folder(self, service, mock_drive_service):
+        """Test uploading a file to a specific folder."""
+        mock_drive_service.files().create().execute.return_value = {
+            "id": "uploaded123",
+            "name": "Uploaded Doc",
+        }
+
+        file_bytes = b"fake content"
+        result = service.upload_file(
+            file_bytes, "Uploaded Doc", "application/pdf", folder_id="folder123"
+        )
+
+        create_calls = [
+            c for c in mock_drive_service.files().create.call_args_list if c[1]
+        ]
+        assert len(create_calls) >= 1
+        call_kwargs = create_calls[-1][1]
+        assert call_kwargs["body"]["parents"] == ["folder123"]
+
+        assert result["id"] == "uploaded123"
+
+
 class TestUpdateDocument:
     """Tests for update_document method."""
 
@@ -292,13 +367,10 @@ class TestUpdateDocument:
         # Verify batch update with delete and insert
         call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
         requests = call_kwargs["body"]["requests"]
-        assert len(requests) == 2
-        # First request: delete old content
-        assert requests[0]["deleteContentRange"]["range"]["startIndex"] == 1
-        assert requests[0]["deleteContentRange"]["range"]["endIndex"] == 99
-        # Second request: insert new content
-        assert requests[1]["insertText"]["location"]["index"] == 1
-        assert requests[1]["insertText"]["text"] == "New content"
+        assert len(requests) == 1
+        # Content should be inserted at index 1 (after clearing)
+        assert requests[0]["insertText"]["location"]["index"] == 1
+        assert requests[0]["insertText"]["text"] == "New content"
 
 
 class TestCommentOnDocument:

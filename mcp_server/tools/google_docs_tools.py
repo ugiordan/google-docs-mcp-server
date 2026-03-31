@@ -1,5 +1,6 @@
 """MCP tool definitions for Google Docs operations."""
 
+import base64
 import json
 import logging
 
@@ -18,6 +19,7 @@ from mcp_server.validation import (
     validate_content_size,
     validate_document_id,
     validate_folder_id,
+    validate_mime_type,
     validate_template_name,
     validate_title,
 )
@@ -280,6 +282,95 @@ def _convert_markdown_to_doc(
         return _error_response(str(e), "API_ERROR")
 
 
+_DEFAULT_MIME_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+
+
+def _upload_document(
+    service: GoogleDocsService,
+    file_content_base64: str,
+    title: str,
+    mime_type: str = "",
+    folder_id: str = "",
+) -> str:
+    """Upload a file as a Google Doc, preserving formatting."""
+    try:
+        validate_title(title)
+        effective_mime_type = mime_type or _DEFAULT_MIME_TYPE
+        validate_mime_type(effective_mime_type)
+        if folder_id:
+            validate_folder_id(folder_id)
+
+        try:
+            file_bytes = base64.b64decode(file_content_base64, validate=True)
+        except Exception:
+            return _error_response("Invalid base64-encoded content", "VALIDATION_ERROR")
+
+        result = service.upload_file(
+            file_bytes=file_bytes,
+            title=title,
+            mime_type=effective_mime_type,
+            folder_id=folder_id or None,
+        )
+        logger.info("upload_document: %s", result.get("id"))
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        logger.error("upload_document error: %s", e)
+        return _error_response(str(e), "API_ERROR")
+
+
+def _update_document_markdown(
+    service: GoogleDocsService,
+    template_config: TemplateConfig,
+    document_id: str,
+    markdown_content: str,
+    template_name: str = "",
+) -> str:
+    """Replace content of an existing Google Doc with styled markdown."""
+    try:
+        validate_document_id(document_id)
+        validate_content_size(markdown_content, MAX_MARKDOWN_BYTES)
+
+        styles = None
+        template_used = None
+        if template_name:
+            available = [t.name for t in template_config.templates]
+            validate_template_name(template_name, available)
+            template = next(
+                t for t in template_config.templates if t.name == template_name
+            )
+            doc_response = service.get_template_styles(template.doc_id)
+            styles = extract_template_styles(doc_response) if doc_response else None
+            template_used = template_name
+
+        blocks = parse_markdown(markdown_content)
+
+        service.clear_document(document_id)
+
+        requests = build_batch_update_requests(blocks, styles)
+        if requests:
+            service.batch_update(document_id, requests)
+
+        logger.info(
+            "update_document_markdown: %s template=%s", document_id, template_used
+        )
+        return json.dumps(
+            {
+                "id": document_id,
+                "url": f"https://docs.google.com/document/d/{document_id}/edit",
+                "template_used": template_used,
+            }
+        )
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        logger.error("update_document_markdown error: %s", e)
+        return _error_response(str(e), "API_ERROR")
+
+
 def register_google_docs_tools(
     mcp,
     service: GoogleDocsService,
@@ -337,4 +428,27 @@ def register_google_docs_tools(
         """Convert markdown content to a styled Google Doc."""
         return _convert_markdown_to_doc(
             service, template_config, markdown_content, title, template_name, folder_id
+        )
+
+    @mcp.tool()
+    def upload_document(
+        file_content_base64: str,
+        title: str,
+        mime_type: str = "",
+        folder_id: str = "",
+    ) -> str:
+        """Upload a file (docx, pdf, html, rtf) as a Google Doc, preserving formatting. Content must be base64-encoded."""
+        return _upload_document(
+            service, file_content_base64, title, mime_type, folder_id
+        )
+
+    @mcp.tool()
+    def update_document_markdown(
+        document_id: str,
+        markdown_content: str,
+        template_name: str = "",
+    ) -> str:
+        """Replace content of an existing Google Doc with styled markdown. Optionally apply template styling."""
+        return _update_document_markdown(
+            service, template_config, document_id, markdown_content, template_name
         )

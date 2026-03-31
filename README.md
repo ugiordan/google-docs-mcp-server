@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that provides Google Docs read and write o
 
 ## Features
 
-- 9 tools for document lifecycle management: list, read, create, update, delete, comment, move, folder lookup, and markdown-to-doc conversion
+- 11 tools for document lifecycle management: list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc conversion, file upload, and markdown update
 - OAuth 2.0 authentication with least-privilege scopes (`drive.file`, `drive.metadata.readonly`, `documents`)
 - Container hardening: read-only filesystem, all capabilities dropped, non-root execution, memory-limited
 - Two-step delete confirmation via server-side cryptographic nonce
@@ -56,7 +56,7 @@ Add to your Claude Code configuration (`~/.claude.json`):
 }
 ```
 
-Restart Claude Code. The `google-docs` MCP server should appear with 9 available tools.
+Restart Claude Code. The `google-docs` MCP server should appear with 11 available tools.
 
 ### Building from source
 
@@ -135,6 +135,8 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 | `move_document` | Move a document to a different folder | `document_id` (str), `folder_id` (str) |
 | `delete_document` | Trash a document (two-step nonce confirmation) | `document_id` (str), `nonce` (str, required on second call) |
 | `convert_markdown_to_doc` | Convert markdown to a styled document | `markdown_content` (str), `title` (str), `template_name` (str, optional), `folder_id` (str, optional) |
+| `upload_document` | Upload a file (docx, pdf, html, rtf) as a Google Doc with formatting preserved | `file_content_base64` (str), `title` (str), `mime_type` (str, optional), `folder_id` (str, optional) |
+| `update_document_markdown` | Replace content of an existing Google Doc with styled markdown | `document_id` (str), `markdown_content` (str), `template_name` (str, optional) |
 
 ### Delete confirmation
 
@@ -147,6 +149,14 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 ### Markdown conversion
 
 `convert_markdown_to_doc` supports optional template-based styling. If templates are configured and no `template_name` is provided, the tool returns the list of available templates. Without any template configuration, documents are created with default Google Docs styling.
+
+### File upload
+
+`upload_document` accepts base64-encoded file content and converts it to a Google Doc via the Drive API, preserving the original formatting. Supported formats: `.docx`, `.pdf`, `.html`, `.rtf`. If no `mime_type` is specified, defaults to `.docx`. Since the server runs in a container with no host filesystem access, file content must be passed as a base64-encoded string.
+
+### Styled markdown update
+
+`update_document_markdown` replaces the content of an existing Google Doc with styled markdown. It reuses the same markdown parsing and template pipeline as `convert_markdown_to_doc`. The existing document content is cleared before the new styled content is applied.
 
 ## Templates
 
@@ -202,7 +212,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (106 unit tests)
+# Run tests (129 unit tests)
 uv run pytest -v
 
 # Lint and format
@@ -223,7 +233,7 @@ uv run python main.py --revoke  # revoke tokens
 
 - **`drive.file` scope boundary**: write operations (update, delete, move, comment) only work on documents created by this server or explicitly opened via `read_document`. Other documents return 403.
 - **Non-atomic replace**: `update_document` in replace mode deletes content then inserts new content via `batchUpdate`. A mid-operation failure may leave partial content.
-- **No host filesystem access**: the server runs in a container and cannot read host files. Pass content as string parameters.
+- **No host filesystem access**: the server runs in a container and cannot read host files. Pass content as string parameters. Use `upload_document` with base64-encoded content for formatted files.
 - **In-memory nonces**: delete nonces are lost on server restart. If the server restarts between the two delete steps, re-initiate the deletion.
 - **Template style limits**: only heading/body fonts, sizes, spacing, and colors are copied. Complex layouts (columns, page breaks, headers/footers) are not supported.
 

@@ -16,6 +16,8 @@ from mcp_server.tools.google_docs_tools import (
     _move_document,
     _read_document,
     _update_document,
+    _update_document_markdown,
+    _upload_document,
 )
 
 
@@ -578,3 +580,301 @@ class TestConvertMarkdownToDoc:
 
                 assert data["id"] == "newdoc123"
                 assert data["template_used"] is None
+
+
+class TestUploadDocument:
+    def test_upload_document_success(self):
+        service = MagicMock()
+        service.upload_file.return_value = {
+            "id": "uploaded123",
+            "name": "My Document",
+            "url": "https://docs.google.com/document/d/uploaded123/edit",
+        }
+
+        import base64
+
+        file_content = base64.b64encode(b"fake docx content").decode()
+
+        result = _upload_document(
+            service,
+            file_content_base64=file_content,
+            title="My Document",
+            mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            folder_id="",
+        )
+        data = json.loads(result)
+
+        assert data["id"] == "uploaded123"
+        assert data["name"] == "My Document"
+        service.upload_file.assert_called_once()
+
+    def test_upload_document_with_folder(self):
+        service = MagicMock()
+        service.upload_file.return_value = {
+            "id": "uploaded123",
+            "name": "My Document",
+            "url": "https://docs.google.com/document/d/uploaded123/edit",
+        }
+
+        import base64
+
+        file_content = base64.b64encode(b"fake content").decode()
+
+        result = _upload_document(
+            service,
+            file_content_base64=file_content,
+            title="My Document",
+            mime_type="application/pdf",
+            folder_id="folder123456789",
+        )
+        data = json.loads(result)
+
+        assert data["id"] == "uploaded123"
+        call_args = service.upload_file.call_args
+        assert call_args[1]["folder_id"] == "folder123456789"
+
+    def test_upload_document_invalid_mime_type(self):
+        service = MagicMock()
+
+        result = _upload_document(
+            service,
+            file_content_base64="dGVzdA==",
+            title="My Document",
+            mime_type="application/zip",
+            folder_id="",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+        assert "Unsupported MIME type" in data["error"]
+        service.upload_file.assert_not_called()
+
+    def test_upload_document_invalid_base64(self):
+        service = MagicMock()
+
+        result = _upload_document(
+            service,
+            file_content_base64="not-valid-base64!!!",
+            title="My Document",
+            mime_type="application/pdf",
+            folder_id="",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_upload_document_empty_title(self):
+        service = MagicMock()
+
+        result = _upload_document(
+            service,
+            file_content_base64="dGVzdA==",
+            title="",
+            mime_type="application/pdf",
+            folder_id="",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_upload_document_default_mime_type(self):
+        service = MagicMock()
+        service.upload_file.return_value = {
+            "id": "uploaded123",
+            "name": "My Document",
+            "url": "https://docs.google.com/document/d/uploaded123/edit",
+        }
+
+        import base64
+
+        file_content = base64.b64encode(b"fake content").decode()
+
+        result = _upload_document(
+            service,
+            file_content_base64=file_content,
+            title="My Document",
+            mime_type="",
+            folder_id="",
+        )
+        data = json.loads(result)
+
+        assert data["id"] == "uploaded123"
+        call_args = service.upload_file.call_args
+        assert (
+            call_args[1]["mime_type"]
+            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+    def test_upload_document_api_error(self):
+        service = MagicMock()
+        service.upload_file.side_effect = Exception("Upload failed")
+
+        import base64
+
+        file_content = base64.b64encode(b"content").decode()
+
+        result = _upload_document(
+            service,
+            file_content_base64=file_content,
+            title="My Document",
+            mime_type="application/pdf",
+            folder_id="",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "API_ERROR"
+
+
+class TestUpdateDocumentMarkdown:
+    def test_update_markdown_without_template(self):
+        service = MagicMock()
+        service.clear_document.return_value = 50
+        service.batch_update.return_value = {"documentId": "doc123"}
+
+        template_config = TemplateConfig(templates=[])
+
+        with patch("mcp_server.tools.google_docs_tools.parse_markdown") as mock_parse:
+            with patch(
+                "mcp_server.tools.google_docs_tools.build_batch_update_requests"
+            ) as mock_build:
+                mock_parse.return_value = [{"type": "paragraph", "text": "Hello"}]
+                mock_build.return_value = [
+                    {"insertText": {"location": {"index": 1}, "text": "Hello\n"}}
+                ]
+
+                result = _update_document_markdown(
+                    service,
+                    template_config,
+                    document_id="doc1234567890",
+                    markdown_content="Hello",
+                    template_name="",
+                )
+                data = json.loads(result)
+
+                assert data["id"] == "doc1234567890"
+                assert data["template_used"] is None
+                service.clear_document.assert_called_once_with("doc1234567890")
+                service.batch_update.assert_called_once()
+
+    def test_update_markdown_with_template(self):
+        service = MagicMock()
+        service.clear_document.return_value = 50
+        service.batch_update.return_value = {"documentId": "doc123"}
+        service.get_template_styles.return_value = {
+            "namedStyles": {
+                "styles": [
+                    {
+                        "namedStyleType": "HEADING_1",
+                        "textStyle": {"fontSize": {"magnitude": 20}},
+                    }
+                ]
+            }
+        }
+
+        template_config = TemplateConfig(
+            templates=[Template(name="default", doc_id="template123456", default=True)]
+        )
+
+        with patch("mcp_server.tools.google_docs_tools.parse_markdown") as mock_parse:
+            with patch(
+                "mcp_server.tools.google_docs_tools.extract_template_styles"
+            ) as mock_extract:
+                with patch(
+                    "mcp_server.tools.google_docs_tools.build_batch_update_requests"
+                ) as mock_build:
+                    mock_parse.return_value = [
+                        {"type": "heading", "level": 1, "text": "Title"}
+                    ]
+                    mock_extract.return_value = {"HEADING_1": {"font_size": 20}}
+                    mock_build.return_value = [
+                        {"insertText": {"location": {"index": 1}, "text": "Title\n"}}
+                    ]
+
+                    result = _update_document_markdown(
+                        service,
+                        template_config,
+                        document_id="doc1234567890",
+                        markdown_content="# Title",
+                        template_name="default",
+                    )
+                    data = json.loads(result)
+
+                    assert data["id"] == "doc1234567890"
+                    assert data["template_used"] == "default"
+                    service.clear_document.assert_called_once_with("doc1234567890")
+                    mock_extract.assert_called_once()
+
+    def test_update_markdown_validation_error_doc_id(self):
+        service = MagicMock()
+        template_config = TemplateConfig(templates=[])
+
+        result = _update_document_markdown(
+            service,
+            template_config,
+            document_id="invalid",
+            markdown_content="Hello",
+            template_name="",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_update_markdown_validation_error_content_size(self):
+        service = MagicMock()
+        template_config = TemplateConfig(templates=[])
+
+        result = _update_document_markdown(
+            service,
+            template_config,
+            document_id="doc1234567890",
+            markdown_content="x" * 6_000_000,
+            template_name="",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_update_markdown_invalid_template(self):
+        service = MagicMock()
+        template_config = TemplateConfig(
+            templates=[Template(name="default", doc_id="template123456", default=True)]
+        )
+
+        result = _update_document_markdown(
+            service,
+            template_config,
+            document_id="doc1234567890",
+            markdown_content="# Hello",
+            template_name="nonexistent",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+        assert "Unknown template" in data["error"]
+
+    def test_update_markdown_api_error(self):
+        service = MagicMock()
+        service.clear_document.side_effect = Exception("API error")
+        template_config = TemplateConfig(templates=[])
+
+        with patch("mcp_server.tools.google_docs_tools.parse_markdown") as mock_parse:
+            mock_parse.return_value = [{"type": "paragraph", "text": "Hello"}]
+
+            result = _update_document_markdown(
+                service,
+                template_config,
+                document_id="doc1234567890",
+                markdown_content="Hello",
+                template_name="",
+            )
+            data = json.loads(result)
+
+            assert "error" in data
+            assert data["code"] == "API_ERROR"

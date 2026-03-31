@@ -10,6 +10,13 @@ MAX_COMMENT_LENGTH = 2048
 MAX_CONTENT_BYTES = 1_048_576  # 1MB
 MAX_MARKDOWN_BYTES = 5_242_880  # 5MB
 
+ALLOWED_MIME_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/pdf",
+    "text/html",
+    "application/rtf",
+}
+
 
 def validate_document_id(doc_id: str) -> bool:
     if not doc_id:
@@ -62,5 +69,16 @@ def validate_template_name(name: str, available: list[str]) -> bool:
     if name not in available:
         raise ValueError(
             f"Unknown template '{name}'. Available: {', '.join(available)}"
+        )
+    return True
+
+
+def validate_mime_type(mime_type: str) -> bool:
+    if not mime_type:
+        raise ValueError("MIME type cannot be empty")
+    if mime_type not in ALLOWED_MIME_TYPES:
+        raise ValueError(
+            f"Unsupported MIME type '{mime_type}'. "
+            f"Supported: {', '.join(sorted(ALLOWED_MIME_TYPES))}"
         )
     return True

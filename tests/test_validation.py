@@ -6,6 +6,7 @@ from mcp_server.validation import (
     validate_content_size,
     validate_document_id,
     validate_folder_id,
+    validate_mime_type,
     validate_template_name,
     validate_title,
 )
@@ -90,3 +91,30 @@ class TestValidateTemplateName:
     def test_rejects_unknown(self):
         with pytest.raises(ValueError, match="Unknown template"):
             validate_template_name("hacked", ["standard", "report"])
+
+
+class TestValidateMimeType:
+    def test_valid_docx_mime_type(self):
+        assert (
+            validate_mime_type(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            is True
+        )
+
+    def test_valid_pdf_mime_type(self):
+        assert validate_mime_type("application/pdf") is True
+
+    def test_valid_html_mime_type(self):
+        assert validate_mime_type("text/html") is True
+
+    def test_valid_rtf_mime_type(self):
+        assert validate_mime_type("application/rtf") is True
+
+    def test_rejects_unsupported_mime_type(self):
+        with pytest.raises(ValueError, match="Unsupported MIME type"):
+            validate_mime_type("application/zip")
+
+    def test_rejects_empty_mime_type(self):
+        with pytest.raises(ValueError, match="MIME type cannot be empty"):
+            validate_mime_type("")
