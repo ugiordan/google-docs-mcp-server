@@ -92,10 +92,11 @@ class TestReadDocument:
         data = json.loads(result)
 
         assert data["id"] == "doc123"
-        assert data["title"] == "Test Doc"
-        assert "<document-content>" in data["content"]
+        assert "<untrusted-data-" in data["title"]
+        assert "Test Doc" in data["title"]
+        assert "<document-content-" in data["content"]
         assert "Hello, world!" in data["content"]
-        assert "</document-content>" in data["content"]
+        assert "</document-content-" in data["content"]
         assert "untrusted external data" in data["content"]
 
     def test_read_document_validation_error(self):
@@ -727,6 +728,78 @@ class TestUploadDocument:
 
         assert "error" in data
         assert data["code"] == "API_ERROR"
+
+    def test_upload_document_from_source_file_id(self):
+        service = MagicMock()
+        service.copy_file_as_doc.return_value = {
+            "id": "copied123456",
+            "name": "Copied Document",
+            "url": "https://docs.google.com/document/d/copied123456/edit",
+        }
+
+        result = _upload_document(
+            service,
+            title="Copied Document",
+            source_file_id="source1234567890",
+        )
+        data = json.loads(result)
+
+        assert data["id"] == "copied123456"
+        assert data["name"] == "Copied Document"
+        service.copy_file_as_doc.assert_called_once_with(
+            file_id="source1234567890",
+            title="Copied Document",
+            folder_id=None,
+        )
+        service.upload_file.assert_not_called()
+
+    def test_upload_document_source_file_id_with_folder(self):
+        service = MagicMock()
+        service.copy_file_as_doc.return_value = {
+            "id": "copied123456",
+            "name": "Copied Document",
+            "url": "https://docs.google.com/document/d/copied123456/edit",
+        }
+
+        result = _upload_document(
+            service,
+            title="Copied Document",
+            source_file_id="source1234567890",
+            folder_id="folder123456789",
+        )
+        data = json.loads(result)
+
+        assert data["id"] == "copied123456"
+        call_args = service.copy_file_as_doc.call_args
+        assert call_args[1]["folder_id"] == "folder123456789"
+
+    def test_upload_document_both_source_and_base64_error(self):
+        service = MagicMock()
+
+        result = _upload_document(
+            service,
+            title="My Document",
+            file_content_base64="dGVzdA==",
+            source_file_id="source1234567890",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+        assert "not both" in data["error"]
+
+    def test_upload_document_neither_source_nor_base64_error(self):
+        service = MagicMock()
+
+        result = _upload_document(
+            service,
+            title="My Document",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+        assert "source_file_id" in data["error"]
 
 
 class TestUpdateDocumentMarkdown:

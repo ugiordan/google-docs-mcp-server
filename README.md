@@ -135,7 +135,7 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 | `move_document` | Move a document to a different folder | `document_id` (str), `folder_id` (str) |
 | `delete_document` | Trash a document (two-step nonce confirmation) | `document_id` (str), `nonce` (str, required on second call) |
 | `convert_markdown_to_doc` | Convert markdown to a styled document | `markdown_content` (str), `title` (str), `template_name` (str, optional), `folder_id` (str, optional) |
-| `upload_document` | Upload a file (docx, pdf, html, rtf) as a Google Doc with formatting preserved | `file_content_base64` (str), `title` (str), `mime_type` (str, optional), `folder_id` (str, optional) |
+| `upload_document` | Upload a file as a Google Doc with formatting preserved | `title` (str), `file_content_base64` (str, optional), `source_file_id` (str, optional), `mime_type` (str, optional), `folder_id` (str, optional) |
 | `update_document_markdown` | Replace content of an existing Google Doc with styled markdown | `document_id` (str), `markdown_content` (str), `template_name` (str, optional) |
 
 ### Delete confirmation
@@ -152,7 +152,12 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 
 ### File upload
 
-`upload_document` accepts base64-encoded file content and converts it to a Google Doc via the Drive API, preserving the original formatting. Supported formats: `.docx`, `.pdf`, `.html`, `.rtf`. If no `mime_type` is specified, defaults to `.docx`. Since the server runs in a container with no host filesystem access, file content must be passed as a base64-encoded string.
+`upload_document` converts a file to a Google Doc, preserving formatting. Two modes:
+
+1. **`source_file_id`**: reference a file already in Google Drive. The server copies and converts it. Best for large files since no content passes through MCP parameters.
+2. **`file_content_base64`**: pass base64-encoded file content directly. Works for small files (.docx, .pdf, .html, .rtf). Defaults to `.docx` if no `mime_type` is specified.
+
+Provide one or the other, not both.
 
 ### Styled markdown update
 
@@ -212,7 +217,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (129 unit tests)
+# Run tests (135 unit tests)
 uv run pytest -v
 
 # Lint and format

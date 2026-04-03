@@ -5,14 +5,18 @@ import time
 
 
 class NonceManager:
+    MAX_STORE_SIZE = 1000
+
     def __init__(self, ttl_seconds: int = 30):
         self._ttl = ttl_seconds
         self._store: dict[str, tuple[str, float]] = {}  # nonce -> (doc_id, expiry)
 
     def create(self, document_id: str) -> str:
+        self._cleanup()
+        if len(self._store) >= self.MAX_STORE_SIZE:
+            raise RuntimeError("Too many pending delete confirmations")
         nonce = secrets.token_urlsafe(32)
         self._store[nonce] = (document_id, time.monotonic() + self._ttl)
-        self._cleanup()
         return nonce
 
     def verify(self, document_id: str, nonce: str) -> bool:

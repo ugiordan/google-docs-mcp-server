@@ -1,6 +1,7 @@
 """Input validation for Google Docs MCP server."""
 
 import re
+import unicodedata
 
 # Google resource IDs: alphanumeric, hyphens, underscores, 10-100 chars
 _ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{10,100}$")
@@ -9,6 +10,7 @@ MAX_TITLE_LENGTH = 255
 MAX_COMMENT_LENGTH = 2048
 MAX_CONTENT_BYTES = 1_048_576  # 1MB
 MAX_MARKDOWN_BYTES = 5_242_880  # 5MB
+MAX_UPLOAD_BYTES = 52_428_800  # 50MB
 
 ALLOWED_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -39,6 +41,12 @@ def validate_folder_id(folder_id: str) -> bool:
 
 
 def sanitize_query(query: str) -> str:
+    # Strip control characters and non-printable Unicode
+    query = "".join(
+        ch
+        for ch in query
+        if ch == " " or (not unicodedata.category(ch).startswith("C"))
+    )
     return query.replace("\\", "\\\\").replace("'", "\\'")
 
 

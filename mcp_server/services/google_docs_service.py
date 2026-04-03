@@ -106,21 +106,7 @@ class GoogleDocsService:
         """
 
         def _read():
-            try:
-                response = (
-                    self.docs_service.documents().get(documentId=doc_id).execute()
-                )
-            except HttpError as e:
-                # Let 429 errors propagate to _retry_on_429
-                if e.resp.status == 429:
-                    raise
-                # Map other errors to user-friendly messages
-                if e.resp.status == 403:
-                    raise Exception("Access denied") from e
-                elif e.resp.status == 404:
-                    raise Exception("Document not found") from e
-                else:
-                    raise Exception(f"Error reading document: {e.resp.status}") from e
+            response = self.docs_service.documents().get(documentId=doc_id).execute()
 
             # Extract text content
             content_parts = []
@@ -305,6 +291,41 @@ class GoogleDocsService:
 
         return self._retry_on_429(_upload)
 
+    def copy_file_as_doc(self, file_id, title, folder_id=None):
+        """Copy a Drive file as a Google Doc, converting format.
+
+        Args:
+            file_id: Source file ID in Google Drive
+            title: Title for the new document
+            folder_id: Optional target folder ID
+
+        Returns:
+            Dictionary with id, name, and url
+        """
+
+        def _copy():
+            body = {
+                "name": title,
+                "mimeType": "application/vnd.google-apps.document",
+            }
+
+            if folder_id:
+                body["parents"] = [folder_id]
+
+            file_metadata = (
+                self.drive_service.files()
+                .copy(fileId=file_id, body=body, fields="id,name")
+                .execute()
+            )
+
+            return {
+                "id": file_metadata["id"],
+                "name": file_metadata["name"],
+                "url": f"https://docs.google.com/document/d/{file_metadata['id']}/edit",
+            }
+
+        return self._retry_on_429(_copy)
+
     def comment_on_document(self, doc_id, comment, quoted_text=None):
         """Add a comment to a Google Doc.
 
@@ -389,20 +410,8 @@ class GoogleDocsService:
         """
 
         def _move():
-            # Verify target folder is accessible (owned by authenticated user)
-            try:
-                self.drive_service.files().get(
-                    fileId=folder_id, fields="id,name"
-                ).execute()
-            except HttpError as e:
-                if e.resp.status == 429:
-                    raise
-                if e.resp.status == 404:
-                    raise Exception("Target folder not found") from e
-                elif e.resp.status == 403:
-                    raise Exception("Access denied to target folder") from e
-                else:
-                    raise Exception(f"Error accessing folder: {e.resp.status}") from e
+            # Verify target folder is accessible
+            self.drive_service.files().get(fileId=folder_id, fields="id,name").execute()
 
             # Get current parents
             file_metadata = (

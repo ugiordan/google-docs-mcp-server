@@ -310,6 +310,40 @@ class TestUploadFile:
         assert result["id"] == "uploaded123"
 
 
+class TestCopyFileAsDoc:
+    """Tests for copy_file_as_doc method."""
+
+    def test_copy_file_as_doc(self, service, mock_drive_service):
+        """Test copying a Drive file as a Google Doc."""
+        mock_drive_service.files().copy().execute.return_value = {
+            "id": "copied123",
+            "name": "Copied Doc",
+        }
+
+        result = service.copy_file_as_doc("source123", "Copied Doc")
+
+        assert result["id"] == "copied123"
+        assert result["name"] == "Copied Doc"
+        assert result["url"] == "https://docs.google.com/document/d/copied123/edit"
+
+    def test_copy_file_as_doc_with_folder(self, service, mock_drive_service):
+        """Test copying a file into a specific folder."""
+        mock_drive_service.files().copy().execute.return_value = {
+            "id": "copied123",
+            "name": "Copied Doc",
+        }
+
+        result = service.copy_file_as_doc(
+            "source123", "Copied Doc", folder_id="folder456"
+        )
+
+        copy_calls = [c for c in mock_drive_service.files().copy.call_args_list if c[1]]
+        assert len(copy_calls) >= 1
+        call_kwargs = copy_calls[-1][1]
+        assert call_kwargs["body"]["parents"] == ["folder456"]
+        assert result["id"] == "copied123"
+
+
 class TestUpdateDocument:
     """Tests for update_document method."""
 
