@@ -1069,6 +1069,20 @@ class TestUpdateDocumentMarkdown:
 
         template_config = TemplateConfig(templates=[])
 
+        service.get_template_styles.return_value = {
+            "namedStyles": {
+                "styles": [
+                    {
+                        "namedStyleType": "NORMAL_TEXT",
+                        "textStyle": {
+                            "fontSize": {"magnitude": 11},
+                            "weightedFontFamily": {"fontFamily": "Red Hat Text"},
+                        },
+                    }
+                ]
+            }
+        }
+
         with patch("mcp_server.tools.google_docs_tools.markdown_to_docx") as mock_docx:
             mock_docx.return_value = b"PK\x03\x04fake-docx"
 
@@ -1082,11 +1096,37 @@ class TestUpdateDocumentMarkdown:
             data = json.loads(result)
 
             assert data["id"] == "doc1234567890"
-            assert data["template_used"] is None
-            # No template specified: should NOT read existing doc styles
-            service.get_template_styles.assert_not_called()
+            assert data["template_used"] == "preserved"
+            # No template specified: reads existing doc styles to preserve them
+            service.get_template_styles.assert_called_once_with("doc1234567890")
             service.update_file_content.assert_called_once()
-            mock_docx.assert_called_once_with("Hello", None)
+            # Styles extracted from existing doc should be passed through
+            mock_docx.assert_called_once()
+            assert mock_docx.call_args[0][1] is not None
+
+    def test_update_markdown_no_template_no_existing_styles(self):
+        service = MagicMock()
+        service.update_file_content.return_value = {
+            "id": "doc1234567890",
+            "name": "Test",
+        }
+        service.get_template_styles.return_value = {"namedStyles": {"styles": []}}
+        template_config = TemplateConfig(templates=[])
+
+        with patch("mcp_server.tools.google_docs_tools.markdown_to_docx") as mock_docx:
+            mock_docx.return_value = b"PK\x03\x04fake-docx"
+
+            result = _update_document_markdown(
+                service,
+                template_config,
+                document_id="doc1234567890",
+                markdown_content="Hello",
+                template_name="",
+            )
+            data = json.loads(result)
+
+            assert data["template_used"] is None
+            mock_docx.assert_called_once_with("Hello", {})
 
     def test_update_markdown_with_template(self):
         service = MagicMock()

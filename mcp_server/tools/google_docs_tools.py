@@ -539,10 +539,7 @@ def _update_document_markdown(
         validate_document_id(document_id)
         validate_content_size(markdown_content, MAX_MARKDOWN_BYTES)
 
-        # Template styles are baked into the .docx file before upload.
-        # The Drive API replaces all content and styles on import, so
-        # reading the existing doc's styles is unnecessary (they get
-        # overwritten anyway).
+        # Resolve styles: explicit template > existing document styles > none.
         styles = None
         template_used = None
         if template_name:
@@ -554,6 +551,12 @@ def _update_document_markdown(
             doc_response = service.get_template_styles(template.doc_id)
             styles = extract_template_styles(doc_response) if doc_response else None
             template_used = template_name
+        else:
+            # No template specified: preserve the existing document's styles.
+            doc_response = service.get_template_styles(document_id)
+            styles = extract_template_styles(doc_response) if doc_response else None
+            if styles:
+                template_used = "preserved"
 
         # Generate .docx and replace the document content via Drive API upload.
         docx_bytes = markdown_to_docx(markdown_content, styles)
