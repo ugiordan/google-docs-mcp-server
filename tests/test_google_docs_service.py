@@ -114,25 +114,212 @@ class TestReadDocument:
     """Tests for read_document method."""
 
     def test_read_document_success(self, service, mock_docs_service):
-        """Test reading a document successfully."""
+        """Test reading a single-tab document."""
         mock_response = {
             "documentId": "doc123",
             "title": "Test Document",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0", "title": ""},
+                    "documentTab": {
+                        "body": {
+                            "content": [
+                                {
+                                    "paragraph": {
+                                        "elements": [
+                                            {"textRun": {"content": "Hello "}},
+                                            {"textRun": {"content": "World"}},
+                                        ]
+                                    }
+                                },
+                                {
+                                    "paragraph": {
+                                        "elements": [
+                                            {
+                                                "textRun": {
+                                                    "content": "\nSecond paragraph"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                },
+                            ]
+                        }
+                    },
+                    "childTabs": [],
+                }
+            ],
+        }
+
+        mock_docs_service.documents().get().execute.return_value = mock_response
+
+        result = service.read_document("doc123")
+
+        # Verify API call uses includeTabsContent
+        get_calls = [
+            c for c in mock_docs_service.documents().get.call_args_list if c[1]
+        ]
+        assert len(get_calls) >= 1
+        assert get_calls[-1][1]["documentId"] == "doc123"
+        assert get_calls[-1][1]["includeTabsContent"] is True
+
+        # Verify result
+        assert result["id"] == "doc123"
+        assert result["title"] == "Test Document"
+        assert result["content"] == "Hello World\nSecond paragraph"
+        # Single tab: no tabs array in result
+        assert "tabs" not in result
+
+    def test_read_document_multi_tab(self, service, mock_docs_service):
+        """Test reading a multi-tab document."""
+        mock_response = {
+            "documentId": "doc123",
+            "title": "Multi-Tab Doc",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0", "title": "Overview"},
+                    "documentTab": {
+                        "body": {
+                            "content": [
+                                {
+                                    "paragraph": {
+                                        "elements": [
+                                            {"textRun": {"content": "First tab"}}
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "childTabs": [],
+                },
+                {
+                    "tabProperties": {"tabId": "t.1", "title": "Details"},
+                    "documentTab": {
+                        "body": {
+                            "content": [
+                                {
+                                    "paragraph": {
+                                        "elements": [
+                                            {"textRun": {"content": "Second tab"}}
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "childTabs": [],
+                },
+            ],
+        }
+
+        mock_docs_service.documents().get().execute.return_value = mock_response
+
+        result = service.read_document("doc123")
+
+        assert result["content"] == "First tab"
+        assert len(result["tabs"]) == 2
+        assert result["tabs"][0]["tab_id"] == "t.0"
+        assert result["tabs"][0]["title"] == "Overview"
+        assert result["tabs"][0]["content"] == "First tab"
+        assert result["tabs"][1]["tab_id"] == "t.1"
+        assert result["tabs"][1]["title"] == "Details"
+        assert result["tabs"][1]["content"] == "Second tab"
+
+    def test_read_document_nested_tabs(self, service, mock_docs_service):
+        """Test reading a document with nested child tabs."""
+        mock_response = {
+            "documentId": "doc123",
+            "title": "Nested Tabs",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0", "title": "Parent"},
+                    "documentTab": {
+                        "body": {
+                            "content": [
+                                {
+                                    "paragraph": {
+                                        "elements": [
+                                            {"textRun": {"content": "Parent content"}}
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "childTabs": [
+                        {
+                            "tabProperties": {
+                                "tabId": "t.1",
+                                "title": "Child",
+                                "parentTabId": "t.0",
+                            },
+                            "documentTab": {
+                                "body": {
+                                    "content": [
+                                        {
+                                            "paragraph": {
+                                                "elements": [
+                                                    {
+                                                        "textRun": {
+                                                            "content": "Child content"
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }
+                            },
+                            "childTabs": [],
+                        }
+                    ],
+                }
+            ],
+        }
+
+        mock_docs_service.documents().get().execute.return_value = mock_response
+
+        result = service.read_document("doc123")
+
+        assert len(result["tabs"]) == 2
+        assert result["tabs"][0]["tab_id"] == "t.0"
+        assert result["tabs"][1]["tab_id"] == "t.1"
+        assert result["tabs"][1]["parent_tab_id"] == "t.0"
+
+    def test_read_document_empty_content(self, service, mock_docs_service):
+        """Test reading document with no content."""
+        mock_response = {
+            "documentId": "doc123",
+            "title": "Empty Doc",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0", "title": ""},
+                    "documentTab": {"body": {"content": []}},
+                    "childTabs": [],
+                }
+            ],
+        }
+
+        mock_docs_service.documents().get().execute.return_value = mock_response
+
+        result = service.read_document("doc123")
+
+        assert result["content"] == ""
+
+    def test_read_document_no_tabs_fallback(self, service, mock_docs_service):
+        """Test reading document when tabs field is absent (legacy)."""
+        mock_response = {
+            "documentId": "doc123",
+            "title": "Legacy Doc",
+            "tabs": [],
             "body": {
                 "content": [
                     {
                         "paragraph": {
-                            "elements": [
-                                {"textRun": {"content": "Hello "}},
-                                {"textRun": {"content": "World"}},
-                            ]
+                            "elements": [{"textRun": {"content": "Legacy content"}}]
                         }
-                    },
-                    {
-                        "paragraph": {
-                            "elements": [{"textRun": {"content": "\nSecond paragraph"}}]
-                        }
-                    },
+                    }
                 ]
             },
         }
@@ -141,31 +328,7 @@ class TestReadDocument:
 
         result = service.read_document("doc123")
 
-        # Verify API call - check the last call with arguments
-        get_calls = [
-            c for c in mock_docs_service.documents().get.call_args_list if c[1]
-        ]
-        assert len(get_calls) >= 1
-        assert get_calls[-1][1]["documentId"] == "doc123"
-
-        # Verify result
-        assert result["id"] == "doc123"
-        assert result["title"] == "Test Document"
-        assert result["content"] == "Hello World\nSecond paragraph"
-
-    def test_read_document_empty_content(self, service, mock_docs_service):
-        """Test reading document with no content."""
-        mock_response = {
-            "documentId": "doc123",
-            "title": "Empty Doc",
-            "body": {"content": []},
-        }
-
-        mock_docs_service.documents().get().execute.return_value = mock_response
-
-        result = service.read_document("doc123")
-
-        assert result["content"] == ""
+        assert result["content"] == "Legacy content"
 
 
 class TestCreateDocument:
@@ -629,6 +792,120 @@ class TestTrashDocument:
         assert result["id"] == "doc123"
         assert result["name"] == "Test Document"
         assert result["trashed"] is True
+
+
+class TestAddTab:
+    """Tests for add_tab method."""
+
+    def test_add_tab_success(self, service, mock_docs_service):
+        mock_docs_service.documents().batchUpdate().execute.return_value = {
+            "replies": [
+                {
+                    "addDocumentTab": {
+                        "tabProperties": {"tabId": "t.newid", "title": "New Tab"}
+                    }
+                }
+            ]
+        }
+
+        result = service.add_tab("doc123", "New Tab")
+
+        call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
+        assert call_kwargs["documentId"] == "doc123"
+        requests = call_kwargs["body"]["requests"]
+        assert requests[0]["addDocumentTab"]["tabProperties"]["title"] == "New Tab"
+
+        assert result["tab_id"] == "t.newid"
+        assert result["title"] == "New Tab"
+        assert result["document_id"] == "doc123"
+
+
+class TestDeleteTab:
+    """Tests for delete_tab method."""
+
+    def test_delete_tab_success(self, service, mock_docs_service):
+        mock_docs_service.documents().batchUpdate().execute.return_value = {}
+
+        result = service.delete_tab("doc123", "t.abc")
+
+        call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
+        requests = call_kwargs["body"]["requests"]
+        assert requests[0]["deleteTab"]["tabId"] == "t.abc"
+
+        assert result["document_id"] == "doc123"
+        assert result["deleted_tab_id"] == "t.abc"
+
+
+class TestRenameTab:
+    """Tests for rename_tab method."""
+
+    def test_rename_tab_success(self, service, mock_docs_service):
+        mock_docs_service.documents().batchUpdate().execute.return_value = {}
+
+        result = service.rename_tab("doc123", "t.abc", "Renamed")
+
+        call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
+        requests = call_kwargs["body"]["requests"]
+        req = requests[0]["updateDocumentTabProperties"]
+        assert req["tabId"] == "t.abc"
+        assert req["tabProperties"]["title"] == "Renamed"
+        assert req["fields"] == "title"
+
+        assert result["tab_id"] == "t.abc"
+        assert result["title"] == "Renamed"
+
+
+class TestUpdateDocumentWithTab:
+    """Tests for update_document with tab_id."""
+
+    def test_update_document_append_with_tab(
+        self, service, mock_docs_service, mock_drive_service
+    ):
+        mock_docs_service.documents().get().execute.return_value = {
+            "documentId": "doc123",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.1"},
+                    "documentTab": {"body": {"content": [{"endIndex": 50}]}},
+                    "childTabs": [],
+                }
+            ],
+        }
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Test",
+            "modifiedTime": "2024-01-05T00:00:00Z",
+        }
+
+        service.update_document("doc123", "New text", mode="append", tab_id="t.1")
+
+        call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
+        requests = call_kwargs["body"]["requests"]
+        location = requests[0]["insertText"]["location"]
+        assert location["index"] == 49
+        assert location["tabId"] == "t.1"
+
+    def test_clear_document_with_tab(self, service, mock_docs_service):
+        mock_docs_service.documents().get().execute.return_value = {
+            "documentId": "doc123",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.2"},
+                    "documentTab": {"body": {"content": [{"endIndex": 30}]}},
+                    "childTabs": [],
+                }
+            ],
+        }
+
+        result = service.clear_document("doc123", tab_id="t.2")
+
+        call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
+        requests = call_kwargs["body"]["requests"]
+        range_dict = requests[0]["deleteContentRange"]["range"]
+        assert range_dict["startIndex"] == 1
+        assert range_dict["endIndex"] == 29
+        assert range_dict["tabId"] == "t.2"
+        assert result == 30
 
 
 class TestGetTemplateStyles:

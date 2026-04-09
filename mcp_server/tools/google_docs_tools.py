@@ -22,6 +22,7 @@ from mcp_server.validation import (
     validate_document_id,
     validate_folder_id,
     validate_mime_type,
+    validate_tab_id,
     validate_template_name,
     validate_title,
 )
@@ -71,7 +72,7 @@ def _list_documents(
 
 
 def _read_document(service: GoogleDocsService, document_id: str) -> str:
-    """Read the text content of a Google Doc."""
+    """Read the text content of a Google Doc, including all tabs."""
     try:
         validate_document_id(document_id)
         result = service.read_document(document_id)
@@ -87,6 +88,18 @@ def _read_document(service: GoogleDocsService, document_id: str) -> str:
             f"</document-content-{boundary}>"
         )
         result["content"] = wrapped
+
+        # Wrap tab content if multi-tab document
+        if "tabs" in result:
+            for tab in result["tabs"]:
+                tab["title"] = _tag_untrusted(tab.get("title", ""))
+                tab_content = tab.get("content", "")
+                tab_boundary = secrets.token_hex(8)
+                tab["content"] = (
+                    f"<tab-content-{tab_boundary}>\n"
+                    f"{tab_content}\n"
+                    f"</tab-content-{tab_boundary}>"
+                )
 
         # Include comments if any exist
         try:
@@ -137,9 +150,13 @@ def _create_document(
 
 
 def _update_document(
-    service: GoogleDocsService, document_id: str, content: str, mode: str = "append"
+    service: GoogleDocsService,
+    document_id: str,
+    content: str,
+    mode: str = "append",
+    tab_id: str = "",
 ) -> str:
-    """Update a Google Doc. Mode can be 'append' or 'replace'."""
+    """Update a Google Doc. Mode can be 'append' or 'replace'. Optionally target a specific tab."""
     try:
         validate_document_id(document_id)
         validate_content_size(content, MAX_CONTENT_BYTES)
@@ -147,10 +164,14 @@ def _update_document(
             return _error_response(
                 "mode must be 'append' or 'replace'", "VALIDATION_ERROR"
             )
-        result = service.update_document(document_id, content, mode=mode)
+        if tab_id:
+            validate_tab_id(tab_id)
+        result = service.update_document(
+            document_id, content, mode=mode, tab_id=tab_id or None
+        )
         if "name" in result:
             result["name"] = _tag_untrusted(result["name"])
-        logger.info("update_document: %s mode=%s", document_id, mode)
+        logger.info("update_document: %s mode=%s tab=%s", document_id, mode, tab_id)
         return json.dumps(result)
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
@@ -250,6 +271,51 @@ def _delete_document(
                     "status": "trashed",
                 }
             )
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "operation")
+
+
+def _create_tab(service: GoogleDocsService, document_id: str, title: str) -> str:
+    """Create a new tab in a Google Doc."""
+    try:
+        validate_document_id(document_id)
+        validate_title(title)
+        result = service.add_tab(document_id, title)
+        logger.info("create_tab: %s in %s", result.get("tab_id"), document_id)
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "operation")
+
+
+def _delete_tab(service: GoogleDocsService, document_id: str, tab_id: str) -> str:
+    """Delete a tab from a Google Doc."""
+    try:
+        validate_document_id(document_id)
+        validate_tab_id(tab_id)
+        result = service.delete_tab(document_id, tab_id)
+        logger.info("delete_tab: %s from %s", tab_id, document_id)
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "operation")
+
+
+def _rename_tab(
+    service: GoogleDocsService, document_id: str, tab_id: str, title: str
+) -> str:
+    """Rename a tab in a Google Doc."""
+    try:
+        validate_document_id(document_id)
+        validate_tab_id(tab_id)
+        validate_title(title)
+        result = service.rename_tab(document_id, tab_id, title)
+        logger.info("rename_tab: %s in %s to '%s'", tab_id, document_id, title)
+        return json.dumps(result)
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
@@ -524,7 +590,7 @@ def register_google_docs_tools(
 
     @mcp.tool()
     def read_document(document_id: str) -> str:
-        """Read the text content of a Google Doc."""
+        """Read the text content of a Google Doc. Returns all tabs when multiple tabs exist."""
         return _read_document(service, document_id)
 
     @mcp.tool()
@@ -533,9 +599,26 @@ def register_google_docs_tools(
         return _create_document(service, title, content, folder_id)
 
     @mcp.tool()
-    def update_document(document_id: str, content: str, mode: str = "append") -> str:
-        """Update a Google Doc. Mode can be 'append' or 'replace'."""
-        return _update_document(service, document_id, content, mode)
+    def update_document(
+        document_id: str, content: str, mode: str = "append", tab_id: str = ""
+    ) -> str:
+        """Update a Google Doc. Mode can be 'append' or 'replace'. Use tab_id to target a specific tab."""
+        return _update_document(service, document_id, content, mode, tab_id)
+
+    @mcp.tool()
+    def create_tab(document_id: str, title: str) -> str:
+        """Create a new tab in a Google Doc. Returns the new tab's ID."""
+        return _create_tab(service, document_id, title)
+
+    @mcp.tool()
+    def delete_tab(document_id: str, tab_id: str) -> str:
+        """Delete a tab from a Google Doc. Cannot delete the last remaining tab."""
+        return _delete_tab(service, document_id, tab_id)
+
+    @mcp.tool()
+    def rename_tab(document_id: str, tab_id: str, title: str) -> str:
+        """Rename a tab in a Google Doc."""
+        return _rename_tab(service, document_id, tab_id, title)
 
     @mcp.tool()
     def comment_on_document(

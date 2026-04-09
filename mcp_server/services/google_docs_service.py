@@ -21,6 +21,77 @@ class GoogleDocsService:
         self.drive_service = build("drive", "v3", credentials=credentials)
         self.docs_service = build("docs", "v1", credentials=credentials)
 
+    @staticmethod
+    def _extract_body_content(body):
+        """Extract text content from a document body.
+
+        Args:
+            body: Document body dict from the API response
+
+        Returns:
+            Concatenated text content string
+        """
+        content_parts = []
+        for item in body.get("content", []):
+            if "paragraph" in item:
+                for element in item["paragraph"].get("elements", []):
+                    if "textRun" in element:
+                        content_parts.append(element["textRun"].get("content", ""))
+        return "".join(content_parts)
+
+    @staticmethod
+    def _flatten_tabs(tabs):
+        """Flatten nested tab structure into a list.
+
+        Args:
+            tabs: List of tab objects from the API response
+
+        Returns:
+            Flat list of tab dicts with tab_id, title, and content
+        """
+        result = []
+        for tab in tabs:
+            tab_props = tab.get("tabProperties", {})
+            doc_tab = tab.get("documentTab", {})
+            body = doc_tab.get("body", {})
+            content = GoogleDocsService._extract_body_content(body)
+            tab_info = {
+                "tab_id": tab_props.get("tabId", ""),
+                "title": tab_props.get("title", ""),
+                "content": content,
+            }
+            parent_id = tab_props.get("parentTabId")
+            if parent_id:
+                tab_info["parent_tab_id"] = parent_id
+            result.append(tab_info)
+            result.extend(GoogleDocsService._flatten_tabs(tab.get("childTabs", [])))
+        return result
+
+    @staticmethod
+    def _find_tab_recursive(tab, tab_id):
+        """Find a tab by ID, searching recursively through child tabs."""
+        if tab.get("tabProperties", {}).get("tabId") == tab_id:
+            return tab
+        for child in tab.get("childTabs", []):
+            found = GoogleDocsService._find_tab_recursive(child, tab_id)
+            if found:
+                return found
+        return None
+
+    @staticmethod
+    def _get_tab_end_index(doc_response, tab_id):
+        """Find the end index of a specific tab's content."""
+        for tab in doc_response.get("tabs", []):
+            found = GoogleDocsService._find_tab_recursive(tab, tab_id)
+            if found:
+                body = found.get("documentTab", {}).get("body", {})
+                end_index = 1
+                for item in body.get("content", []):
+                    if "endIndex" in item:
+                        end_index = item["endIndex"]
+                return end_index
+        raise ValueError(f"Tab '{tab_id}' not found in document")
+
     def _retry_on_429(self, fn, max_retries=3):
         """Execute function with retry logic for 429 rate limit errors.
 
@@ -93,34 +164,44 @@ class GoogleDocsService:
         return self._retry_on_429(_list)
 
     def read_document(self, doc_id):
-        """Read the content of a Google Doc.
+        """Read the content of a Google Doc, including all tabs.
 
         Args:
             doc_id: The document ID
 
         Returns:
-            Dictionary with id, title, and content
+            Dictionary with id, title, content (first tab), and tabs
+            (list of tab dicts when multiple tabs exist)
 
         Raises:
             Exception: On access denied or not found errors
         """
 
         def _read():
-            response = self.docs_service.documents().get(documentId=doc_id).execute()
+            response = (
+                self.docs_service.documents()
+                .get(documentId=doc_id, includeTabsContent=True)
+                .execute()
+            )
 
-            # Extract text content
-            content_parts = []
-            for item in response.get("body", {}).get("content", []):
-                if "paragraph" in item:
-                    for element in item["paragraph"].get("elements", []):
-                        if "textRun" in element:
-                            content_parts.append(element["textRun"].get("content", ""))
+            tabs = self._flatten_tabs(response.get("tabs", []))
 
-            return {
+            if tabs:
+                content = tabs[0]["content"]
+            else:
+                # Fallback for docs without tabs info
+                content = self._extract_body_content(response.get("body", {}))
+
+            result = {
                 "id": response["documentId"],
                 "title": response.get("title", ""),
-                "content": "".join(content_parts),
+                "content": content,
             }
+
+            if len(tabs) > 1:
+                result["tabs"] = tabs
+
+            return result
 
         return self._retry_on_429(_read)
 
@@ -165,39 +246,46 @@ class GoogleDocsService:
 
         return self._retry_on_429(_create)
 
-    def update_document(self, doc_id, content, mode="append"):
+    def update_document(self, doc_id, content, mode="append", tab_id=None):
         """Update a Google Doc with new content.
 
         Args:
             doc_id: The document ID
             content: Content to add or replace
             mode: Update mode - 'append' or 'replace' (default: 'append')
+            tab_id: Optional tab ID to target a specific tab
 
         Returns:
             Dictionary with id, name, url, and updatedTime
         """
         if mode == "replace":
-            self.clear_document(doc_id)
+            self.clear_document(doc_id, tab_id=tab_id)
 
         def _update():
             if mode == "append":
-                # Get current document to find endIndex
-                doc = self.docs_service.documents().get(documentId=doc_id).execute()
-                end_index = 1
-                for item in doc.get("body", {}).get("content", []):
-                    if "endIndex" in item:
-                        end_index = item["endIndex"]
+                if tab_id:
+                    doc = (
+                        self.docs_service.documents()
+                        .get(documentId=doc_id, includeTabsContent=True)
+                        .execute()
+                    )
+                    end_index = self._get_tab_end_index(doc, tab_id)
+                else:
+                    doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                    end_index = 1
+                    for item in doc.get("body", {}).get("content", []):
+                        if "endIndex" in item:
+                            end_index = item["endIndex"]
 
-                requests = [
-                    {
-                        "insertText": {
-                            "location": {"index": end_index - 1},
-                            "text": content,
-                        }
-                    }
-                ]
+                location = {"index": end_index - 1}
+                if tab_id:
+                    location["tabId"] = tab_id
+                requests = [{"insertText": {"location": location, "text": content}}]
             else:  # replace (already cleared)
-                requests = [{"insertText": {"location": {"index": 1}, "text": content}}]
+                location = {"index": 1}
+                if tab_id:
+                    location["tabId"] = tab_id
+                requests = [{"insertText": {"location": location, "text": content}}]
 
             self.docs_service.documents().batchUpdate(
                 documentId=doc_id, body={"requests": requests}
@@ -219,32 +307,37 @@ class GoogleDocsService:
 
         return self._retry_on_429(_update)
 
-    def clear_document(self, doc_id):
-        """Clear all content from a document.
+    def clear_document(self, doc_id, tab_id=None):
+        """Clear all content from a document or a specific tab.
 
         Args:
             doc_id: The document ID
+            tab_id: Optional tab ID to clear a specific tab
 
         Returns:
             The original endIndex before clearing
         """
 
         def _clear():
-            doc = self.docs_service.documents().get(documentId=doc_id).execute()
-
-            end_index = 1
-            for item in doc.get("body", {}).get("content", []):
-                if "endIndex" in item:
-                    end_index = item["endIndex"]
+            if tab_id:
+                doc = (
+                    self.docs_service.documents()
+                    .get(documentId=doc_id, includeTabsContent=True)
+                    .execute()
+                )
+                end_index = self._get_tab_end_index(doc, tab_id)
+            else:
+                doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                end_index = 1
+                for item in doc.get("body", {}).get("content", []):
+                    if "endIndex" in item:
+                        end_index = item["endIndex"]
 
             if end_index > 1:
-                requests = [
-                    {
-                        "deleteContentRange": {
-                            "range": {"startIndex": 1, "endIndex": end_index - 1}
-                        }
-                    }
-                ]
+                range_dict = {"startIndex": 1, "endIndex": end_index - 1}
+                if tab_id:
+                    range_dict["tabId"] = tab_id
+                requests = [{"deleteContentRange": {"range": range_dict}}]
                 self.docs_service.documents().batchUpdate(
                     documentId=doc_id, body={"requests": requests}
                 ).execute()
@@ -252,6 +345,89 @@ class GoogleDocsService:
             return end_index
 
         return self._retry_on_429(_clear)
+
+    def add_tab(self, doc_id, title):
+        """Add a new tab to a document.
+
+        Args:
+            doc_id: The document ID
+            title: Title for the new tab
+
+        Returns:
+            Dictionary with tab_id and title
+        """
+
+        def _add_tab():
+            requests = [{"addDocumentTab": {"tabProperties": {"title": title}}}]
+            response = (
+                self.docs_service.documents()
+                .batchUpdate(documentId=doc_id, body={"requests": requests})
+                .execute()
+            )
+
+            # Extract the new tab ID from the reply
+            replies = response.get("replies", [])
+            tab_id = ""
+            if replies:
+                tab_id = (
+                    replies[0]
+                    .get("addDocumentTab", {})
+                    .get("tabProperties", {})
+                    .get("tabId", "")
+                )
+
+            return {"tab_id": tab_id, "title": title, "document_id": doc_id}
+
+        return self._retry_on_429(_add_tab)
+
+    def delete_tab(self, doc_id, tab_id):
+        """Delete a tab from a document.
+
+        Args:
+            doc_id: The document ID
+            tab_id: The tab ID to delete
+
+        Returns:
+            Dictionary with document_id and deleted tab_id
+        """
+
+        def _delete_tab():
+            requests = [{"deleteTab": {"tabId": tab_id}}]
+            self.docs_service.documents().batchUpdate(
+                documentId=doc_id, body={"requests": requests}
+            ).execute()
+            return {"document_id": doc_id, "deleted_tab_id": tab_id}
+
+        return self._retry_on_429(_delete_tab)
+
+    def rename_tab(self, doc_id, tab_id, title):
+        """Rename a tab in a document.
+
+        Args:
+            doc_id: The document ID
+            tab_id: The tab ID to rename
+            title: New title for the tab
+
+        Returns:
+            Dictionary with document_id, tab_id, and new title
+        """
+
+        def _rename_tab():
+            requests = [
+                {
+                    "updateDocumentTabProperties": {
+                        "tabId": tab_id,
+                        "tabProperties": {"title": title},
+                        "fields": "title",
+                    }
+                }
+            ]
+            self.docs_service.documents().batchUpdate(
+                documentId=doc_id, body={"requests": requests}
+            ).execute()
+            return {"document_id": doc_id, "tab_id": tab_id, "title": title}
+
+        return self._retry_on_429(_rename_tab)
 
     def upload_file(self, file_bytes, title, mime_type, folder_id=None):
         """Upload a file and convert it to a Google Doc.

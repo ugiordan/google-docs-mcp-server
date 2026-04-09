@@ -9,12 +9,15 @@ from mcp_server.tools.google_docs_tools import (
     _comment_on_document,
     _convert_markdown_to_doc,
     _create_document,
+    _create_tab,
     _delete_document,
+    _delete_tab,
     _error_response,
     _find_folder,
     _list_documents,
     _move_document,
     _read_document,
+    _rename_tab,
     _update_document,
     _update_document_markdown,
     _upload_document,
@@ -164,6 +167,30 @@ class TestReadDocument:
         assert data["id"] == "doc123"
         assert "comments" not in data
 
+    def test_read_document_multi_tab(self):
+        service = MagicMock()
+        service.read_document.return_value = {
+            "id": "doc123",
+            "title": "Multi-Tab Doc",
+            "content": "Tab 1 content",
+            "tabs": [
+                {"tab_id": "t.0", "title": "Overview", "content": "Tab 1 content"},
+                {"tab_id": "t.1", "title": "Details", "content": "Tab 2 content"},
+            ],
+        }
+        service.list_comments.return_value = []
+
+        result = _read_document(service, document_id="doc1234567890")
+        data = json.loads(result)
+
+        assert len(data["tabs"]) == 2
+        assert "<untrusted-data-" in data["tabs"][0]["title"]
+        assert "Overview" in data["tabs"][0]["title"]
+        assert "<tab-content-" in data["tabs"][0]["content"]
+        assert "Tab 1 content" in data["tabs"][0]["content"]
+        assert "<tab-content-" in data["tabs"][1]["content"]
+        assert "Tab 2 content" in data["tabs"][1]["content"]
+
     def test_read_document_validation_error(self):
         service = MagicMock()
 
@@ -271,7 +298,7 @@ class TestUpdateDocument:
 
         assert data["id"] == "doc123"
         service.update_document.assert_called_once_with(
-            "doc1234567890", "New content", mode="append"
+            "doc1234567890", "New content", mode="append", tab_id=None
         )
 
     def test_update_document_replace(self):
@@ -290,7 +317,7 @@ class TestUpdateDocument:
 
         assert data["id"] == "doc123"
         service.update_document.assert_called_once_with(
-            "doc1234567890", "New content", mode="replace"
+            "doc1234567890", "New content", mode="replace", tab_id=None
         )
 
     def test_update_document_invalid_mode(self):
@@ -304,6 +331,44 @@ class TestUpdateDocument:
         assert "error" in data
         assert data["code"] == "VALIDATION_ERROR"
         assert "append" in data["error"] and "replace" in data["error"]
+
+    def test_update_document_with_tab_id(self):
+        service = MagicMock()
+        service.update_document.return_value = {
+            "id": "doc123",
+            "name": "Updated Doc",
+            "url": "https://docs.google.com/document/d/doc123/edit",
+            "updatedTime": "2024-01-02T00:00:00Z",
+        }
+
+        result = _update_document(
+            service,
+            document_id="doc1234567890",
+            content="Tab content",
+            mode="append",
+            tab_id="t.123",
+        )
+        data = json.loads(result)
+
+        assert data["id"] == "doc123"
+        service.update_document.assert_called_once_with(
+            "doc1234567890", "Tab content", mode="append", tab_id="t.123"
+        )
+
+    def test_update_document_invalid_tab_id(self):
+        service = MagicMock()
+
+        result = _update_document(
+            service,
+            document_id="doc1234567890",
+            content="test",
+            mode="append",
+            tab_id="invalid tab id with spaces!",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
 
     def test_update_document_validation_error(self):
         service = MagicMock()
@@ -1133,3 +1198,133 @@ class TestUpdateDocumentMarkdown:
 
             assert "error" in data
             assert data["code"] == "API_ERROR"
+
+
+class TestCreateTab:
+    def test_create_tab_success(self):
+        service = MagicMock()
+        service.add_tab.return_value = {
+            "tab_id": "t.abc123",
+            "title": "New Tab",
+            "document_id": "doc1234567890",
+        }
+
+        result = _create_tab(service, document_id="doc1234567890", title="New Tab")
+        data = json.loads(result)
+
+        assert data["tab_id"] == "t.abc123"
+        assert data["title"] == "New Tab"
+        assert data["document_id"] == "doc1234567890"
+        service.add_tab.assert_called_once_with("doc1234567890", "New Tab")
+
+    def test_create_tab_validation_error_doc_id(self):
+        service = MagicMock()
+
+        result = _create_tab(service, document_id="bad", title="Tab")
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_create_tab_validation_error_title(self):
+        service = MagicMock()
+
+        result = _create_tab(service, document_id="doc1234567890", title="")
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_create_tab_api_error(self):
+        service = MagicMock()
+        service.add_tab.side_effect = Exception("API error")
+
+        result = _create_tab(service, document_id="doc1234567890", title="Tab")
+        data = json.loads(result)
+
+        assert data["code"] == "API_ERROR"
+
+
+class TestDeleteTab:
+    def test_delete_tab_success(self):
+        service = MagicMock()
+        service.delete_tab.return_value = {
+            "document_id": "doc1234567890",
+            "deleted_tab_id": "t.abc123",
+        }
+
+        result = _delete_tab(service, document_id="doc1234567890", tab_id="t.abc123")
+        data = json.loads(result)
+
+        assert data["deleted_tab_id"] == "t.abc123"
+        service.delete_tab.assert_called_once_with("doc1234567890", "t.abc123")
+
+    def test_delete_tab_validation_error_tab_id(self):
+        service = MagicMock()
+
+        result = _delete_tab(service, document_id="doc1234567890", tab_id="")
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_delete_tab_api_error(self):
+        service = MagicMock()
+        service.delete_tab.side_effect = Exception("Cannot delete last tab")
+
+        result = _delete_tab(service, document_id="doc1234567890", tab_id="t.0")
+        data = json.loads(result)
+
+        assert data["code"] == "API_ERROR"
+
+
+class TestRenameTab:
+    def test_rename_tab_success(self):
+        service = MagicMock()
+        service.rename_tab.return_value = {
+            "document_id": "doc1234567890",
+            "tab_id": "t.abc123",
+            "title": "Renamed Tab",
+        }
+
+        result = _rename_tab(
+            service,
+            document_id="doc1234567890",
+            tab_id="t.abc123",
+            title="Renamed Tab",
+        )
+        data = json.loads(result)
+
+        assert data["tab_id"] == "t.abc123"
+        assert data["title"] == "Renamed Tab"
+        service.rename_tab.assert_called_once_with(
+            "doc1234567890", "t.abc123", "Renamed Tab"
+        )
+
+    def test_rename_tab_validation_error_tab_id(self):
+        service = MagicMock()
+
+        result = _rename_tab(
+            service, document_id="doc1234567890", tab_id="", title="New"
+        )
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_rename_tab_validation_error_title(self):
+        service = MagicMock()
+
+        result = _rename_tab(
+            service, document_id="doc1234567890", tab_id="t.0", title=""
+        )
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_rename_tab_api_error(self):
+        service = MagicMock()
+        service.rename_tab.side_effect = Exception("API error")
+
+        result = _rename_tab(
+            service, document_id="doc1234567890", tab_id="t.0", title="New"
+        )
+        data = json.loads(result)
+
+        assert data["code"] == "API_ERROR"

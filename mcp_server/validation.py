@@ -5,6 +5,7 @@ import unicodedata
 
 # Google resource IDs: alphanumeric, hyphens, underscores, 10-100 chars
 _ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{10,100}$")
+_TAB_ID_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,100}$")
 
 MAX_TITLE_LENGTH = 255
 MAX_COMMENT_LENGTH = 2048
@@ -77,6 +78,16 @@ def validate_template_name(name: str, available: list[str]) -> bool:
     if name not in available:
         raise ValueError(
             f"Unknown template '{name}'. Available: {', '.join(available)}"
+        )
+    return True
+
+
+def validate_tab_id(tab_id: str) -> bool:
+    if not tab_id:
+        raise ValueError("Tab ID cannot be empty")
+    if not _TAB_ID_PATTERN.match(tab_id):
+        raise ValueError(
+            "Invalid tab ID format: must be 1-100 alphanumeric characters, dots, hyphens, or underscores"
         )
     return True
 

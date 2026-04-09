@@ -7,6 +7,7 @@ from mcp_server.validation import (
     validate_document_id,
     validate_folder_id,
     validate_mime_type,
+    validate_tab_id,
     validate_template_name,
     validate_title,
 )
@@ -91,6 +92,26 @@ class TestValidateTemplateName:
     def test_rejects_unknown(self):
         with pytest.raises(ValueError, match="Unknown template"):
             validate_template_name("hacked", ["standard", "report"])
+
+
+class TestValidateTabId:
+    def test_valid_tab_id(self):
+        assert validate_tab_id("t.0") is True
+
+    def test_valid_tab_id_long(self):
+        assert validate_tab_id("t.abc123def") is True
+
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError, match="Tab ID cannot be empty"):
+            validate_tab_id("")
+
+    def test_rejects_spaces(self):
+        with pytest.raises(ValueError, match="Invalid tab ID format"):
+            validate_tab_id("t 0")
+
+    def test_rejects_special_chars(self):
+        with pytest.raises(ValueError, match="Invalid tab ID format"):
+            validate_tab_id("t.0; DROP TABLE")
 
 
 class TestValidateMimeType:

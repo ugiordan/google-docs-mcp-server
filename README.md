@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that provides Google Docs read and write o
 
 ## Features
 
-- 11 tools for document lifecycle management: list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc conversion, file upload, and markdown update
+- 14 tools for document lifecycle management: list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc conversion, file upload, markdown update, and tab management (create, delete, rename)
 - OAuth 2.0 authentication with least-privilege scopes (`drive.file`, `drive.metadata.readonly`, `documents`)
 - Container hardening: read-only filesystem, all capabilities dropped, non-root execution, memory-limited
 - Two-step delete confirmation via server-side cryptographic nonce
@@ -57,7 +57,7 @@ Add to your Claude Code configuration (`~/.claude.json`):
 }
 ```
 
-Restart Claude Code. The `google-docs` MCP server should appear with 11 available tools.
+Restart Claude Code. The `google-docs` MCP server should appear with 14 available tools.
 
 ### Building from source
 
@@ -128,9 +128,12 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `list_documents` | List documents, optionally filtered by name query | `query` (str, optional), `max_results` (int, 1-100, default 10) |
-| `read_document` | Read document text content and comments | `document_id` (str) |
+| `read_document` | Read document text content, comments, and all tabs | `document_id` (str) |
 | `create_document` | Create a new document | `title` (str), `content` (str, optional), `folder_id` (str, optional) |
-| `update_document` | Append to or replace document content | `document_id` (str), `content` (str), `mode` ("append"\|"replace", default "append") |
+| `update_document` | Append to or replace document content, optionally in a specific tab | `document_id` (str), `content` (str), `mode` ("append"\|"replace", default "append"), `tab_id` (str, optional) |
+| `create_tab` | Create a new tab in a document | `document_id` (str), `title` (str) |
+| `delete_tab` | Delete a tab from a document | `document_id` (str), `tab_id` (str) |
+| `rename_tab` | Rename a tab in a document | `document_id` (str), `tab_id` (str), `title` (str) |
 | `comment_on_document` | Add a comment, optionally anchored to text | `document_id` (str), `comment` (str), `quoted_text` (str, optional) |
 | `find_folder` | Search for a Drive folder by name | `folder_name` (str) |
 | `move_document` | Move a document to a different folder | `document_id` (str), `folder_id` (str) |
@@ -143,9 +146,15 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 
 `delete_document` requires two calls. The first call returns a cryptographic nonce (valid for 30 seconds). The second call must include the nonce to confirm. Nonces are single-use, document-specific, and stored in-memory. Documents are moved to trash, not permanently deleted.
 
+### Tabs
+
+`read_document` returns all tabs when a document has multiple tabs. Each tab includes `tab_id`, `title`, and `content`. Use `create_tab`, `delete_tab`, and `rename_tab` to manage tabs. Use `update_document` with `tab_id` to write content to a specific tab.
+
+`update_document_markdown` replaces the entire document (all tabs) since it uploads a .docx file. It cannot target individual tabs.
+
 ### Read output wrapping
 
-`read_document` wraps returned content in `<document-content>` tags with an untrusted data warning. This helps MCP clients distinguish document content from system instructions. Comments (with replies, authors, quoted text, and resolved status) are included when present. Comment fetching is best-effort and won't fail the read if unavailable.
+`read_document` wraps returned content in `<document-content>` tags with an untrusted data warning. Tab content is wrapped in `<tab-content>` tags. This helps MCP clients distinguish document content from system instructions. Comments (with replies, authors, quoted text, and resolved status) are included when present. Comment fetching is best-effort and won't fail the read if unavailable.
 
 ### Markdown conversion
 
@@ -251,7 +260,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (201 unit tests)
+# Run tests (228 unit tests)
 uv run pytest -v
 
 # Lint and format
