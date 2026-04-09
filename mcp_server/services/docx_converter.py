@@ -13,6 +13,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
+from lxml import etree
 
 from mcp_server.services.markdown_converter import parse_markdown
 
@@ -160,6 +161,49 @@ def _add_horizontal_rule(doc):
     pPr.append(pBdr)
 
 
+def _set_style_font(style, font_name):
+    """Set font on a style, overriding theme font references.
+
+    python-docx's font.name only sets w:ascii and w:hAnsi. Text that
+    references the theme font (e.g. Calibri as minorHAnsi) won't pick
+    up the style-level override. Setting all four rFonts attributes
+    ensures the font applies regardless of theme.
+    """
+    style.font.name = font_name
+    rPr = style.element.get_or_add_rPr()
+    rFonts = rPr.find(qn("w:rFonts"))
+    if rFonts is None:
+        rFonts = OxmlElement("w:rFonts")
+        rPr.append(rFonts)
+    for attr in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+        rFonts.set(qn(attr), font_name)
+
+
+def _override_theme_fonts(doc, body_font, heading_font=None):
+    """Override the document theme's minor/major fonts.
+
+    The default python-docx template uses Calibri/Cambria as theme fonts.
+    Any text that references the theme (rather than an explicit font)
+    falls back to these defaults even when styles specify a different
+    font. Changing the theme XML itself eliminates this fallback.
+    """
+    ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+    for rel in doc.part.rels.values():
+        if "theme" not in rel.reltype:
+            continue
+        theme_part = rel.target_part
+        theme_xml = etree.fromstring(theme_part.blob)
+        minor = theme_xml.find(".//a:minorFont/a:latin", ns)
+        if minor is not None:
+            minor.set("typeface", body_font)
+        major = theme_xml.find(".//a:majorFont/a:latin", ns)
+        if major is not None:
+            major.set("typeface", heading_font or body_font)
+        theme_part._blob = etree.tostring(
+            theme_xml, xml_declaration=True, encoding="UTF-8", standalone=True
+        )
+
+
 def _apply_template_styles(doc, styles):
     """Apply template styles to the document's built-in styles."""
     style_mapping = {
@@ -172,6 +216,9 @@ def _apply_template_styles(doc, styles):
         "HEADING_6": "Heading 6",
     }
 
+    body_font = None
+    heading_font = None
+
     for style_type, doc_style_name in style_mapping.items():
         if style_type not in styles:
             continue
@@ -182,7 +229,11 @@ def _apply_template_styles(doc, styles):
             continue
 
         if "font_family" in props:
-            doc_style.font.name = props["font_family"]
+            _set_style_font(doc_style, props["font_family"])
+            if style_type == "NORMAL_TEXT":
+                body_font = props["font_family"]
+            elif style_type == "HEADING_1" and heading_font is None:
+                heading_font = props["font_family"]
         if "font_size" in props:
             doc_style.font.size = Pt(props["font_size"])
         if "foreground_color" in props:
@@ -192,6 +243,10 @@ def _apply_template_styles(doc, styles):
             g = int(rgb.get("green", 0) * 255)
             b = int(rgb.get("blue", 0) * 255)
             doc_style.font.color.rgb = RGBColor(r, g, b)
+
+    # Override the document theme to prevent Calibri fallback
+    if body_font:
+        _override_theme_fonts(doc, body_font, heading_font)
 
 
 def blocks_to_docx(blocks: list[dict], styles: dict | None = None) -> bytes:

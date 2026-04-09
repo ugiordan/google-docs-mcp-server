@@ -287,6 +287,39 @@ class TestBlocksToDocx:
         assert h1_style.font.name == "Georgia"
         assert h1_style.font.size == Pt(28)
 
+    def test_template_body_font_overrides_theme(self):
+        """Verify that NORMAL_TEXT font overrides the Calibri theme font."""
+        from docx.oxml.ns import qn
+
+        blocks = [{"type": "paragraph", "text": "Hello", "runs": [{"text": "Hello"}]}]
+        styles = {
+            "NORMAL_TEXT": {"font_family": "Red Hat Text"},
+            "HEADING_1": {"font_family": "Red Hat Display"},
+        }
+        doc = _load_doc(blocks_to_docx(blocks, styles))
+
+        # Normal style should have all rFonts attributes set
+        normal = doc.styles["Normal"]
+        assert normal.font.name == "Red Hat Text"
+        rPr = normal.element.rPr
+        rFonts = rPr.find(qn("w:rFonts"))
+        assert rFonts.get(qn("w:ascii")) == "Red Hat Text"
+        assert rFonts.get(qn("w:hAnsi")) == "Red Hat Text"
+        assert rFonts.get(qn("w:eastAsia")) == "Red Hat Text"
+        assert rFonts.get(qn("w:cs")) == "Red Hat Text"
+
+        # Theme minor font should be overridden (no Calibri fallback)
+        from lxml import etree
+
+        for rel in doc.part.rels.values():
+            if "theme" in rel.reltype:
+                ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+                theme_xml = etree.fromstring(rel.target_part.blob)
+                minor = theme_xml.find(".//a:minorFont/a:latin", ns)
+                assert minor.get("typeface") == "Red Hat Text"
+                major = theme_xml.find(".//a:majorFont/a:latin", ns)
+                assert major.get("typeface") == "Red Hat Display"
+
     def test_template_styles_with_color(self):
         styles = {
             "NORMAL_TEXT": {
