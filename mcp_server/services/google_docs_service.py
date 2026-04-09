@@ -258,34 +258,41 @@ class GoogleDocsService:
         Returns:
             Dictionary with id, name, url, and updatedTime
         """
-        if mode == "replace":
-            self.clear_document(doc_id, tab_id=tab_id)
 
         def _update():
-            if mode == "append":
-                if tab_id:
-                    doc = (
-                        self.docs_service.documents()
-                        .get(documentId=doc_id, includeTabsContent=True)
-                        .execute()
-                    )
-                    end_index = self._get_tab_end_index(doc, tab_id)
-                else:
-                    doc = self.docs_service.documents().get(documentId=doc_id).execute()
-                    end_index = 1
-                    for item in doc.get("body", {}).get("content", []):
-                        if "endIndex" in item:
-                            end_index = item["endIndex"]
+            if tab_id:
+                doc = (
+                    self.docs_service.documents()
+                    .get(documentId=doc_id, includeTabsContent=True)
+                    .execute()
+                )
+                end_index = self._get_tab_end_index(doc, tab_id)
+            else:
+                doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                end_index = 1
+                for item in doc.get("body", {}).get("content", []):
+                    if "endIndex" in item:
+                        end_index = item["endIndex"]
 
-                location = {"index": end_index - 1}
+            requests = []
+
+            if mode == "replace" and end_index > 1:
+                # Delete existing content first (in the same batchUpdate for atomicity)
+                range_dict = {"startIndex": 1, "endIndex": end_index - 1}
                 if tab_id:
-                    location["tabId"] = tab_id
-                requests = [{"insertText": {"location": location, "text": content}}]
-            else:  # replace (already cleared)
-                location = {"index": 1}
-                if tab_id:
-                    location["tabId"] = tab_id
-                requests = [{"insertText": {"location": location, "text": content}}]
+                    range_dict["tabId"] = tab_id
+                requests.append({"deleteContentRange": {"range": range_dict}})
+                # After delete, insert at index 1
+                insert_index = 1
+            elif mode == "append":
+                insert_index = end_index - 1
+            else:
+                insert_index = 1
+
+            location = {"index": insert_index}
+            if tab_id:
+                location["tabId"] = tab_id
+            requests.append({"insertText": {"location": location, "text": content}})
 
             self.docs_service.documents().batchUpdate(
                 documentId=doc_id, body={"requests": requests}

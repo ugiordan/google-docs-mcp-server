@@ -561,13 +561,17 @@ class TestUpdateDocument:
 
         service.update_document("doc123", "New content", mode="replace")
 
-        # Verify batch update with delete and insert
+        # Verify atomic batch update with delete + insert in single call
         call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
         requests = call_kwargs["body"]["requests"]
-        assert len(requests) == 1
-        # Content should be inserted at index 1 (after clearing)
-        assert requests[0]["insertText"]["location"]["index"] == 1
-        assert requests[0]["insertText"]["text"] == "New content"
+        assert len(requests) == 2
+        # First request: delete existing content
+        assert "deleteContentRange" in requests[0]
+        assert requests[0]["deleteContentRange"]["range"]["startIndex"] == 1
+        assert requests[0]["deleteContentRange"]["range"]["endIndex"] == 99
+        # Second request: insert new content at index 1
+        assert requests[1]["insertText"]["location"]["index"] == 1
+        assert requests[1]["insertText"]["text"] == "New content"
 
 
 class TestCommentOnDocument:

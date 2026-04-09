@@ -28,7 +28,7 @@ _ALLOWED_URL_SCHEMES = {"http", "https", "mailto"}
 def _add_hyperlink(paragraph, url, text):
     """Add a hyperlink run to a paragraph."""
     parsed = urlparse(url)
-    if parsed.scheme and parsed.scheme.lower() not in _ALLOWED_URL_SCHEMES:
+    if not parsed.scheme or parsed.scheme.lower() not in _ALLOWED_URL_SCHEMES:
         # Render as plain text instead of a clickable link
         paragraph.add_run(text)
         return
@@ -192,7 +192,10 @@ def _override_theme_fonts(doc, body_font, heading_font=None):
         if "theme" not in rel.reltype:
             continue
         theme_part = rel.target_part
-        theme_xml = etree.fromstring(theme_part.blob)
+        try:
+            theme_xml = etree.fromstring(theme_part.blob)
+        except etree.XMLSyntaxError:
+            continue
         minor = theme_xml.find(".//a:minorFont/a:latin", ns)
         if minor is not None:
             minor.set("typeface", body_font)

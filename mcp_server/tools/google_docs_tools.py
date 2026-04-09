@@ -123,7 +123,7 @@ def _read_document(service: GoogleDocsService, document_id: str) -> str:
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "read_document")
 
 
 def _create_document(
@@ -146,7 +146,7 @@ def _create_document(
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "create_document")
 
 
 def _update_document(
@@ -176,7 +176,7 @@ def _update_document(
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "update_document")
 
 
 def _comment_on_document(
@@ -196,7 +196,7 @@ def _comment_on_document(
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "comment_on_document")
 
 
 def _find_folder(service: GoogleDocsService, folder_name: str) -> str:
@@ -214,7 +214,7 @@ def _find_folder(service: GoogleDocsService, folder_name: str) -> str:
         logger.info("find_folder: found=%s", result.get("found"))
         return json.dumps(result)
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "find_folder")
 
 
 def _move_document(service: GoogleDocsService, document_id: str, folder_id: str) -> str:
@@ -230,7 +230,7 @@ def _move_document(service: GoogleDocsService, document_id: str, folder_id: str)
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "move_document")
 
 
 def _delete_document(
@@ -274,7 +274,7 @@ def _delete_document(
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "delete_document")
 
 
 def _create_tab(service: GoogleDocsService, document_id: str, title: str) -> str:
@@ -288,7 +288,7 @@ def _create_tab(service: GoogleDocsService, document_id: str, title: str) -> str
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "create_tab")
 
 
 def _delete_tab(service: GoogleDocsService, document_id: str, tab_id: str) -> str:
@@ -302,7 +302,7 @@ def _delete_tab(service: GoogleDocsService, document_id: str, tab_id: str) -> st
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "delete_tab")
 
 
 def _rename_tab(
@@ -319,7 +319,7 @@ def _rename_tab(
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "rename_tab")
 
 
 def _convert_markdown_to_doc(
@@ -381,7 +381,7 @@ def _convert_markdown_to_doc(
         return json.dumps(
             {
                 "id": doc_id,
-                "name": _tag_untrusted(title),
+                "name": _tag_untrusted(result.get("name", title)),
                 "url": f"https://docs.google.com/document/d/{doc_id}/edit",
                 "template_used": template_used,
             }
@@ -389,7 +389,7 @@ def _convert_markdown_to_doc(
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "convert_markdown_to_doc")
 
 
 _DEFAULT_MIME_TYPE = (
@@ -524,7 +524,7 @@ def _upload_document(
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "upload_document")
 
 
 def _update_document_markdown(
@@ -575,7 +575,7 @@ def _update_document_markdown(
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "operation")
+        return _handle_api_error(e, "update_document_markdown")
 
 
 def register_google_docs_tools(

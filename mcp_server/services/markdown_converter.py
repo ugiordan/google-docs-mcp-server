@@ -92,6 +92,15 @@ class _MarkdownHTMLParser(HTMLParser):
         # Blockquote
         self.blockquote_depth = 0
 
+    def _reset_inline_state(self):
+        """Reset inline formatting and start fresh runs for a new block."""
+        self.bold = False
+        self.italic = False
+        self.inline_code = False
+        self.strikethrough = False
+        self.link_url = None
+        self.current_runs = []
+
     def _make_run(self, text):
         """Create a formatting run with current inline state."""
         if not text:
@@ -156,7 +165,7 @@ class _MarkdownHTMLParser(HTMLParser):
         if tag in _HEADING_TAGS:
             self.block_type = "heading"
             self.block_meta = {"level": int(tag[1])}
-            self.current_runs = []
+            self._reset_inline_state()
         elif tag == "p":
             if self.blockquote_depth > 0:
                 self.block_type = "blockquote"
@@ -164,7 +173,7 @@ class _MarkdownHTMLParser(HTMLParser):
             else:
                 self.block_type = "paragraph"
                 self.block_meta = {}
-            self.current_runs = []
+            self._reset_inline_state()
         elif tag in ("ul", "ol"):
             self.list_stack.append(tag)
         elif tag == "li":
@@ -176,7 +185,7 @@ class _MarkdownHTMLParser(HTMLParser):
                 "ordered": self.list_stack[-1] == "ol" if self.list_stack else False,
                 "nesting_level": max(0, len(self.list_stack) - 1),
             }
-            self.current_runs = []
+            self._reset_inline_state()
         elif tag == "blockquote":
             self.blockquote_depth += 1
         elif tag == "hr":
