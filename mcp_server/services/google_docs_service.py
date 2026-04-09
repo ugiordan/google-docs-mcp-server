@@ -106,21 +106,7 @@ class GoogleDocsService:
         """
 
         def _read():
-            try:
-                response = (
-                    self.docs_service.documents().get(documentId=doc_id).execute()
-                )
-            except HttpError as e:
-                # Let 429 errors propagate to _retry_on_429
-                if e.resp.status == 429:
-                    raise
-                # Map other errors to user-friendly messages
-                if e.resp.status == 403:
-                    raise Exception("Access denied") from e
-                elif e.resp.status == 404:
-                    raise Exception("Document not found") from e
-                else:
-                    raise Exception(f"Error reading document: {e.resp.status}") from e
+            response = self.docs_service.documents().get(documentId=doc_id).execute()
 
             # Extract text content
             content_parts = []
@@ -289,7 +275,7 @@ class GoogleDocsService:
             if folder_id:
                 body["parents"] = [folder_id]
 
-            media = MediaInMemoryUpload(file_bytes, mimetype=mime_type, resumable=True)
+            media = MediaInMemoryUpload(file_bytes, mimetype=mime_type, resumable=False)
 
             file_metadata = (
                 self.drive_service.files()
@@ -304,6 +290,73 @@ class GoogleDocsService:
             }
 
         return self._retry_on_429(_upload)
+
+    def copy_file_as_doc(self, file_id, title, folder_id=None):
+        """Copy a Drive file as a Google Doc, converting format.
+
+        Args:
+            file_id: Source file ID in Google Drive
+            title: Title for the new document
+            folder_id: Optional target folder ID
+
+        Returns:
+            Dictionary with id, name, and url
+        """
+
+        def _copy():
+            body = {
+                "name": title,
+                "mimeType": "application/vnd.google-apps.document",
+            }
+
+            if folder_id:
+                body["parents"] = [folder_id]
+
+            file_metadata = (
+                self.drive_service.files()
+                .copy(fileId=file_id, body=body, fields="id,name")
+                .execute()
+            )
+
+            return {
+                "id": file_metadata["id"],
+                "name": file_metadata["name"],
+                "url": f"https://docs.google.com/document/d/{file_metadata['id']}/edit",
+            }
+
+        return self._retry_on_429(_copy)
+
+    def update_file_content(self, doc_id, file_bytes, mime_type):
+        """Replace a Google Doc's content by uploading new file bytes.
+
+        Uses Drive API files().update() with media, which converts the uploaded
+        content (e.g. .docx) into the native Google Docs format.
+
+        Args:
+            doc_id: The document ID to update
+            file_bytes: Raw file bytes (e.g. .docx content)
+            mime_type: Source file MIME type
+
+        Returns:
+            Dictionary with id, name, and url
+        """
+
+        def _update_content():
+            media = MediaInMemoryUpload(file_bytes, mimetype=mime_type, resumable=False)
+
+            file_metadata = (
+                self.drive_service.files()
+                .update(fileId=doc_id, media_body=media, fields="id,name")
+                .execute()
+            )
+
+            return {
+                "id": file_metadata["id"],
+                "name": file_metadata["name"],
+                "url": f"https://docs.google.com/document/d/{file_metadata['id']}/edit",
+            }
+
+        return self._retry_on_429(_update_content)
 
     def comment_on_document(self, doc_id, comment, quoted_text=None):
         """Add a comment to a Google Doc.
@@ -336,6 +389,67 @@ class GoogleDocsService:
             }
 
         return self._retry_on_429(_comment)
+
+    def list_comments(self, doc_id):
+        """List all comments on a document.
+
+        Args:
+            doc_id: The document ID
+
+        Returns:
+            List of comment dicts with id, author, content, quotedText,
+            resolved status, and replies
+        """
+
+        max_comments = 100
+
+        def _list_comments():
+            comments = []
+            page_token = None
+
+            while True:
+                response = (
+                    self.drive_service.comments()
+                    .list(
+                        fileId=doc_id,
+                        fields="comments(id,author/displayName,content,"
+                        "quotedFileContent/value,resolved,"
+                        "replies(author/displayName,content)),nextPageToken",
+                        pageToken=page_token,
+                    )
+                    .execute()
+                )
+
+                for c in response.get("comments", []):
+                    comment = {
+                        "id": c["id"],
+                        "author": c.get("author", {}).get("displayName", ""),
+                        "content": c.get("content", ""),
+                        "resolved": c.get("resolved", False),
+                    }
+                    quoted = c.get("quotedFileContent", {}).get("value")
+                    if quoted:
+                        comment["quoted_text"] = quoted
+                    replies = c.get("replies", [])
+                    if replies:
+                        comment["replies"] = [
+                            {
+                                "author": r.get("author", {}).get("displayName", ""),
+                                "content": r.get("content", ""),
+                            }
+                            for r in replies
+                        ]
+                    comments.append(comment)
+                    if len(comments) >= max_comments:
+                        return comments
+
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    break
+
+            return comments
+
+        return self._retry_on_429(_list_comments)
 
     def find_folder(self, folder_name):
         """Find a folder by name.
@@ -389,20 +503,8 @@ class GoogleDocsService:
         """
 
         def _move():
-            # Verify target folder is accessible (owned by authenticated user)
-            try:
-                self.drive_service.files().get(
-                    fileId=folder_id, fields="id,name"
-                ).execute()
-            except HttpError as e:
-                if e.resp.status == 429:
-                    raise
-                if e.resp.status == 404:
-                    raise Exception("Target folder not found") from e
-                elif e.resp.status == 403:
-                    raise Exception("Access denied to target folder") from e
-                else:
-                    raise Exception(f"Error accessing folder: {e.resp.status}") from e
+            # Verify target folder is accessible
+            self.drive_service.files().get(fileId=folder_id, fields="id,name").execute()
 
             # Get current parents
             file_metadata = (

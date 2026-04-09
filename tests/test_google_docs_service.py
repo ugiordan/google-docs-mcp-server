@@ -310,6 +310,40 @@ class TestUploadFile:
         assert result["id"] == "uploaded123"
 
 
+class TestCopyFileAsDoc:
+    """Tests for copy_file_as_doc method."""
+
+    def test_copy_file_as_doc(self, service, mock_drive_service):
+        """Test copying a Drive file as a Google Doc."""
+        mock_drive_service.files().copy().execute.return_value = {
+            "id": "copied123",
+            "name": "Copied Doc",
+        }
+
+        result = service.copy_file_as_doc("source123", "Copied Doc")
+
+        assert result["id"] == "copied123"
+        assert result["name"] == "Copied Doc"
+        assert result["url"] == "https://docs.google.com/document/d/copied123/edit"
+
+    def test_copy_file_as_doc_with_folder(self, service, mock_drive_service):
+        """Test copying a file into a specific folder."""
+        mock_drive_service.files().copy().execute.return_value = {
+            "id": "copied123",
+            "name": "Copied Doc",
+        }
+
+        result = service.copy_file_as_doc(
+            "source123", "Copied Doc", folder_id="folder456"
+        )
+
+        copy_calls = [c for c in mock_drive_service.files().copy.call_args_list if c[1]]
+        assert len(copy_calls) >= 1
+        call_kwargs = copy_calls[-1][1]
+        assert call_kwargs["body"]["parents"] == ["folder456"]
+        assert result["id"] == "copied123"
+
+
 class TestUpdateDocument:
     """Tests for update_document method."""
 
@@ -413,6 +447,80 @@ class TestCommentOnDocument:
         # Verify API call includes quoted text
         call_kwargs = mock_drive_service.comments().create.call_args[1]
         assert call_kwargs["body"]["quotedFileContent"]["value"] == "teh"
+
+
+class TestListComments:
+    """Tests for list_comments method."""
+
+    def test_list_comments_success(self, service, mock_drive_service):
+        mock_drive_service.comments().list().execute.return_value = {
+            "comments": [
+                {
+                    "id": "c1",
+                    "author": {"displayName": "Alice"},
+                    "content": "Fix this",
+                    "quotedFileContent": {"value": "broken code"},
+                    "resolved": False,
+                    "replies": [
+                        {
+                            "author": {"displayName": "Bob"},
+                            "content": "Done",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        result = service.list_comments("doc123")
+
+        assert len(result) == 1
+        assert result[0]["id"] == "c1"
+        assert result[0]["author"] == "Alice"
+        assert result[0]["content"] == "Fix this"
+        assert result[0]["quoted_text"] == "broken code"
+        assert result[0]["resolved"] is False
+        assert len(result[0]["replies"]) == 1
+        assert result[0]["replies"][0]["author"] == "Bob"
+        assert result[0]["replies"][0]["content"] == "Done"
+
+    def test_list_comments_empty(self, service, mock_drive_service):
+        mock_drive_service.comments().list().execute.return_value = {
+            "comments": [],
+        }
+
+        result = service.list_comments("doc123")
+        assert result == []
+
+    def test_list_comments_no_quoted_text(self, service, mock_drive_service):
+        mock_drive_service.comments().list().execute.return_value = {
+            "comments": [
+                {
+                    "id": "c1",
+                    "author": {"displayName": "Alice"},
+                    "content": "General comment",
+                    "resolved": True,
+                }
+            ],
+        }
+
+        result = service.list_comments("doc123")
+        assert "quoted_text" not in result[0]
+        assert result[0]["resolved"] is True
+
+    def test_list_comments_no_replies(self, service, mock_drive_service):
+        mock_drive_service.comments().list().execute.return_value = {
+            "comments": [
+                {
+                    "id": "c1",
+                    "author": {"displayName": "Alice"},
+                    "content": "Note",
+                    "replies": [],
+                }
+            ],
+        }
+
+        result = service.list_comments("doc123")
+        assert "replies" not in result[0]
 
 
 class TestFindFolder:

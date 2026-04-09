@@ -37,12 +37,22 @@ def load_tokens(token_path: str) -> Credentials | None:
         return None
 
     try:
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(token_path, flags)
+        with os.fdopen(fd, "r") as f:
+            token_info = json.load(f)
+        creds = Credentials.from_authorized_user_info(token_info, SCOPES)
 
         # Refresh expired credentials if possible
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
             save_tokens(creds, token_path)
+
+        if not creds or not creds.valid:
+            logger.warning("Credentials are not valid after load/refresh")
+            return None
 
         return creds
     except Exception:
@@ -52,18 +62,16 @@ def load_tokens(token_path: str) -> Credentials | None:
 
 def save_tokens(creds: Credentials, token_path: str) -> None:
     """
-    Save OAuth tokens to file with secure permissions.
-    Uses atomic write (write to temp file, then rename) to prevent TOCTOU races.
+    Save OAuth tokens to file with secure permissions (0o600).
 
     Args:
         creds: Credentials object to save
         token_path: Path where tokens should be saved
     """
-    fd = os.open(
-        token_path,
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-        0o600,
-    )
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(token_path, flags, 0o600)
     try:
         with os.fdopen(fd, "w") as f:
             f.write(creds.to_json())
@@ -103,21 +111,27 @@ def revoke_tokens(token_path: str) -> None:
     """
     # Read token data first, then delete regardless of revocation outcome
     try:
-        with open(token_path) as f:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(token_path, flags)
+        with os.fdopen(fd, "r") as f:
             token_data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
         return
 
     try:
         # Revoke the token via Google's revocation endpoint
         token = token_data.get("token")
         if token:
-            requests.post(
+            resp = requests.post(
                 "https://oauth2.googleapis.com/revoke",
                 params={"token": token},
                 headers={"content-type": "application/x-www-form-urlencoded"},
                 timeout=10,
             )
+            if resp.status_code >= 300:
+                logger.warning("Token revocation returned status %d", resp.status_code)
     finally:
         # Always delete the token file
         try:

@@ -49,6 +49,7 @@ Add to your Claude Code configuration (`~/.claude.json`):
         "-v", "${HOME}/.config/google-docs-mcp/tokens.json:/app/tokens.json:rw",
         "-v", "${HOME}/.config/google-docs-mcp/templates.yaml:/app/templates.yaml:ro",
         "-v", "${HOME}/.config/google-docs-mcp/credentials.json:/app/credentials.json:ro",
+        "-v", "${HOME}/uploads:/uploads:ro",
         "ghcr.io/ugiordan/google-docs-mcp-server:latest"
       ]
     }
@@ -127,7 +128,7 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `list_documents` | List documents, optionally filtered by name query | `query` (str, optional), `max_results` (int, 1-100, default 10) |
-| `read_document` | Read document text content | `document_id` (str) |
+| `read_document` | Read document text content and comments | `document_id` (str) |
 | `create_document` | Create a new document | `title` (str), `content` (str, optional), `folder_id` (str, optional) |
 | `update_document` | Append to or replace document content | `document_id` (str), `content` (str), `mode` ("append"\|"replace", default "append") |
 | `comment_on_document` | Add a comment, optionally anchored to text | `document_id` (str), `comment` (str), `quoted_text` (str, optional) |
@@ -135,7 +136,7 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 | `move_document` | Move a document to a different folder | `document_id` (str), `folder_id` (str) |
 | `delete_document` | Trash a document (two-step nonce confirmation) | `document_id` (str), `nonce` (str, required on second call) |
 | `convert_markdown_to_doc` | Convert markdown to a styled document | `markdown_content` (str), `title` (str), `template_name` (str, optional), `folder_id` (str, optional) |
-| `upload_document` | Upload a file (docx, pdf, html, rtf) as a Google Doc with formatting preserved | `file_content_base64` (str), `title` (str), `mime_type` (str, optional), `folder_id` (str, optional) |
+| `upload_document` | Upload a file as a Google Doc with formatting preserved | `title` (str), `file_path` (str, optional), `file_content_base64` (str, optional), `source_file_id` (str, optional), `mime_type` (str, optional), `folder_id` (str, optional) |
 | `update_document_markdown` | Replace content of an existing Google Doc with styled markdown | `document_id` (str), `markdown_content` (str), `template_name` (str, optional) |
 
 ### Delete confirmation
@@ -144,7 +145,7 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 
 ### Read output wrapping
 
-`read_document` wraps returned content in `<document-content>` tags with an untrusted data warning. This helps MCP clients distinguish document content from system instructions.
+`read_document` wraps returned content in `<document-content>` tags with an untrusted data warning. This helps MCP clients distinguish document content from system instructions. Comments (with replies, authors, quoted text, and resolved status) are included when present. Comment fetching is best-effort and won't fail the read if unavailable.
 
 ### Markdown conversion
 
@@ -152,7 +153,13 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 
 ### File upload
 
-`upload_document` accepts base64-encoded file content and converts it to a Google Doc via the Drive API, preserving the original formatting. Supported formats: `.docx`, `.pdf`, `.html`, `.rtf`. If no `mime_type` is specified, defaults to `.docx`. Since the server runs in a container with no host filesystem access, file content must be passed as a base64-encoded string.
+`upload_document` converts a file to a Google Doc, preserving formatting. Three modes:
+
+1. **`file_path`**: path to a file mounted at `/uploads/` inside the container. Best for large files. Drop the file in `~/uploads/` on the host and pass `/uploads/filename.docx`. MIME type is detected from the extension.
+2. **`source_file_id`**: ID of a file already in Google Drive. The server copies and converts it. No file transfer through MCP at all.
+3. **`file_content_base64`**: base64-encoded file content. Only works for small files (.docx, .pdf, .html, .rtf) since large payloads get truncated by the LLM.
+
+Provide exactly one of these. The MCP config mounts `~/uploads` read-only into the container by default.
 
 ### Styled markdown update
 
@@ -176,6 +183,38 @@ The `doc_id` is the ID of a Google Doc whose named styles (heading fonts, body f
 Styles copied: heading fonts (H1-H6), body text font, font sizes, line spacing, text colors. Not copied: complex layouts, columns, page breaks, headers/footers, Apps Script, macros.
 
 If `templates.yaml` is missing or empty, all tools work normally and `convert_markdown_to_doc` uses default styling.
+
+## Uploading Files
+
+For large files that exceed MCP parameter limits, use `--upload` to upload directly to Google Drive, then reference the file ID with `upload_document`'s `source_file_id` parameter.
+
+```bash
+# Upload and convert to Google Doc in one step
+podman run -it --rm \
+  -v ~/.config/google-docs-mcp/tokens.json:/app/tokens.json:rw \
+  -v ~/.config/google-docs-mcp/credentials.json:/app/credentials.json:ro \
+  -v /path/to/file.docx:/tmp/file.docx:ro \
+  ghcr.io/ugiordan/google-docs-mcp-server:latest --upload /tmp/file.docx --convert
+
+# Upload without conversion (keeps original format in Drive)
+podman run -it --rm \
+  -v ~/.config/google-docs-mcp/tokens.json:/app/tokens.json:rw \
+  -v ~/.config/google-docs-mcp/credentials.json:/app/credentials.json:ro \
+  -v /path/to/file.docx:/tmp/file.docx:ro \
+  ghcr.io/ugiordan/google-docs-mcp-server:latest --upload /tmp/file.docx
+
+# With custom title and folder
+podman run -it --rm \
+  -v ~/.config/google-docs-mcp/tokens.json:/app/tokens.json:rw \
+  -v ~/.config/google-docs-mcp/credentials.json:/app/credentials.json:ro \
+  -v /path/to/file.docx:/tmp/file.docx:ro \
+  ghcr.io/ugiordan/google-docs-mcp-server:latest \
+  --upload /tmp/file.docx --title "My Document" --folder-id FOLDER_ID --convert
+```
+
+The command prints the file ID, which you can then use with the `upload_document` MCP tool's `source_file_id` parameter for further processing.
+
+Supported formats for `--convert`: `.docx`, `.pdf`, `.html`, `.htm`, `.rtf`.
 
 ## Token Management
 
@@ -212,7 +251,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (129 unit tests)
+# Run tests (201 unit tests)
 uv run pytest -v
 
 # Lint and format
@@ -233,7 +272,7 @@ uv run python main.py --revoke  # revoke tokens
 
 - **`drive.file` scope boundary**: write operations (update, delete, move, comment) only work on documents created by this server or explicitly opened via `read_document`. Other documents return 403.
 - **Non-atomic replace**: `update_document` in replace mode deletes content then inserts new content via `batchUpdate`. A mid-operation failure may leave partial content.
-- **No host filesystem access**: the server runs in a container and cannot read host files. Pass content as string parameters. Use `upload_document` with base64-encoded content for formatted files.
+- **Limited host filesystem access**: the server runs in a container. File uploads are restricted to the `/uploads/` mount point. Mount your upload directory in the MCP config: `-v $HOME/uploads:/uploads:ro`.
 - **In-memory nonces**: delete nonces are lost on server restart. If the server restarts between the two delete steps, re-initiate the deletion.
 - **Template style limits**: only heading/body fonts, sizes, spacing, and colors are copied. Complex layouts (columns, page breaks, headers/footers) are not supported.
 
