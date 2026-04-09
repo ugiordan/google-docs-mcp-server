@@ -847,7 +847,7 @@ class TestRenameTab:
         call_kwargs = mock_docs_service.documents().batchUpdate.call_args[1]
         requests = call_kwargs["body"]["requests"]
         req = requests[0]["updateDocumentTabProperties"]
-        assert req["tabId"] == "t.abc"
+        assert req["tabProperties"]["tabId"] == "t.abc"
         assert req["tabProperties"]["title"] == "Renamed"
         assert req["fields"] == "title"
 

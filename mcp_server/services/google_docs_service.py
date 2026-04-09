@@ -416,8 +416,7 @@ class GoogleDocsService:
             requests = [
                 {
                     "updateDocumentTabProperties": {
-                        "tabId": tab_id,
-                        "tabProperties": {"title": title},
+                        "tabProperties": {"tabId": tab_id, "title": title},
                         "fields": "title",
                     }
                 }
