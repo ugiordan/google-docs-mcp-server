@@ -783,8 +783,9 @@ class GoogleDocsService:
 
             requests = []
 
-            # Clear existing content first
-            if end_index > 1:
+            # Clear existing content first (end_index - 1 > 1 ensures
+            # a non-empty range; empty tabs have end_index=2).
+            if end_index > 2:
                 requests.append(
                     {
                         "deleteContentRange": {
