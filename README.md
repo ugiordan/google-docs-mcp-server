@@ -140,7 +140,7 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 | `delete_document` | Trash a document (two-step nonce confirmation) | `document_id` (str), `nonce` (str, required on second call) |
 | `convert_markdown_to_doc` | Convert markdown to a styled document | `markdown_content` (str), `title` (str), `template_name` (str, optional), `folder_id` (str, optional) |
 | `upload_document` | Upload a file as a Google Doc with formatting preserved | `title` (str), `file_path` (str, optional), `file_content_base64` (str, optional), `source_file_id` (str, optional), `mime_type` (str, optional), `folder_id` (str, optional) |
-| `update_document_markdown` | Replace content of an existing Google Doc with styled markdown | `document_id` (str), `markdown_content` (str), `template_name` (str, optional) |
+| `update_document_markdown` | Replace content of an existing Google Doc with styled markdown | `document_id` (str), `markdown_content` (str), `template_name` (str, optional), `tab_id` (str, optional) |
 
 ### Delete confirmation
 
@@ -150,7 +150,7 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 
 `read_document` returns all tabs when a document has multiple tabs. Each tab includes `tab_id`, `title`, and `content`. Use `create_tab`, `delete_tab`, and `rename_tab` to manage tabs. Use `update_document` with `tab_id` to write content to a specific tab.
 
-`update_document_markdown` replaces the entire document (all tabs) since it uploads a .docx file. It cannot target individual tabs.
+`update_document_markdown` supports per-tab updates via the `tab_id` parameter. When `tab_id` is specified, it uses batchUpdate to apply styled content (headings, bold, italic, code, links, blockquotes) to that tab without affecting other tabs. Without `tab_id`, it uploads a .docx file which replaces the entire document including all tabs.
 
 ### Read output wrapping
 
@@ -260,7 +260,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (230 unit tests)
+# Run tests (261 unit tests)
 uv run pytest -v
 
 # Lint and format

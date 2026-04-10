@@ -1240,6 +1240,116 @@ class TestUpdateDocumentMarkdown:
             assert data["code"] == "API_ERROR"
 
 
+class TestUpdateDocumentMarkdownWithTabId:
+    def test_update_markdown_with_tab_id(self):
+        service = MagicMock()
+        service.get_template_styles.return_value = {"namedStyles": {"styles": []}}
+        service.update_tab_styled.return_value = {
+            "id": "doc1234567890",
+            "name": "Test",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2026-01-01T00:00:00Z",
+        }
+        template_config = TemplateConfig(templates=[])
+
+        result = _update_document_markdown(
+            service,
+            template_config,
+            document_id="doc1234567890",
+            markdown_content="# Hello\n\nWorld",
+            template_name="",
+            tab_id="t.abc123",
+        )
+        data = json.loads(result)
+
+        assert data["id"] == "doc1234567890"
+        assert data["tab_id"] == "t.abc123"
+        service.update_tab_styled.assert_called_once()
+        # Should NOT use .docx upload path
+        service.update_file_content.assert_not_called()
+
+    def test_update_markdown_with_tab_id_and_template(self):
+        service = MagicMock()
+        service.get_template_styles.return_value = {
+            "namedStyles": {
+                "styles": [
+                    {
+                        "namedStyleType": "HEADING_1",
+                        "textStyle": {"fontSize": {"magnitude": 20}},
+                    }
+                ]
+            }
+        }
+        service.update_tab_styled.return_value = {
+            "id": "doc1234567890",
+            "name": "Test",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2026-01-01T00:00:00Z",
+        }
+        template_config = TemplateConfig(
+            templates=[Template(name="default", doc_id="template123456", default=True)]
+        )
+
+        result = _update_document_markdown(
+            service,
+            template_config,
+            document_id="doc1234567890",
+            markdown_content="# Hello",
+            template_name="default",
+            tab_id="t.abc123",
+        )
+        data = json.loads(result)
+
+        assert data["template_used"] == "default"
+        assert data["tab_id"] == "t.abc123"
+        service.update_tab_styled.assert_called_once()
+
+    def test_update_markdown_invalid_tab_id(self):
+        service = MagicMock()
+        template_config = TemplateConfig(templates=[])
+
+        result = _update_document_markdown(
+            service,
+            template_config,
+            document_id="doc1234567890",
+            markdown_content="Hello",
+            template_name="",
+            tab_id="invalid tab id!",
+        )
+        data = json.loads(result)
+
+        assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_update_markdown_tab_id_calls_batch_requests(self):
+        service = MagicMock()
+        service.get_template_styles.return_value = {"namedStyles": {"styles": []}}
+        service.update_tab_styled.return_value = {
+            "id": "doc1234567890",
+            "name": "Test",
+        }
+        template_config = TemplateConfig(templates=[])
+
+        with patch(
+            "mcp_server.tools.google_docs_tools.blocks_to_batch_requests"
+        ) as mock_batch:
+            mock_batch.return_value = [
+                {"insertText": {"location": {"index": 1}, "text": "Hi\n"}}
+            ]
+
+            _update_document_markdown(
+                service,
+                template_config,
+                document_id="doc1234567890",
+                markdown_content="Hi",
+                template_name="",
+                tab_id="t.abc123",
+            )
+
+            mock_batch.assert_called_once()
+            assert mock_batch.call_args[1]["tab_id"] == "t.abc123"
+
+
 class TestCreateTab:
     def test_create_tab_success(self):
         service = MagicMock()

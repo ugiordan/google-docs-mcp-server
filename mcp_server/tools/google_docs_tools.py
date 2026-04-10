@@ -10,9 +10,13 @@ from googleapiclient.errors import HttpError
 
 from mcp_server.config import TemplateConfig
 from mcp_server.nonce import NonceManager
+from mcp_server.services.batch_style_writer import blocks_to_batch_requests
 from mcp_server.services.docx_converter import _DOCX_MIME, markdown_to_docx
 from mcp_server.services.google_docs_service import GoogleDocsService
-from mcp_server.services.markdown_converter import extract_template_styles
+from mcp_server.services.markdown_converter import (
+    extract_template_styles,
+    parse_markdown,
+)
 from mcp_server.validation import (
     MAX_CONTENT_BYTES,
     MAX_MARKDOWN_BYTES,
@@ -536,11 +540,19 @@ def _update_document_markdown(
     document_id: str,
     markdown_content: str,
     template_name: str = "",
+    tab_id: str = "",
 ) -> str:
-    """Replace content of an existing Google Doc with styled markdown."""
+    """Replace content of an existing Google Doc (or a specific tab) with styled markdown.
+
+    When tab_id is specified, uses batchUpdate to apply styled content to that
+    tab without affecting other tabs. Without tab_id, uploads a .docx file which
+    replaces the entire document (all tabs).
+    """
     try:
         validate_document_id(document_id)
         validate_content_size(markdown_content, MAX_MARKDOWN_BYTES)
+        if tab_id:
+            validate_tab_id(tab_id)
 
         # Resolve styles: explicit template > existing document styles > none.
         styles = None
@@ -561,7 +573,30 @@ def _update_document_markdown(
             if styles:
                 template_used = "preserved"
 
-        # Generate .docx and replace the document content via Drive API upload.
+        if tab_id:
+            # Tab-specific update: parse markdown and apply via batchUpdate.
+            # This preserves other tabs and uses the document's named styles.
+            blocks = parse_markdown(markdown_content)
+            batch_requests = blocks_to_batch_requests(blocks, tab_id=tab_id)
+            result = service.update_tab_styled(document_id, tab_id, batch_requests)
+
+            logger.info(
+                "update_document_markdown: %s tab=%s template=%s",
+                document_id,
+                tab_id,
+                template_used,
+            )
+            return json.dumps(
+                {
+                    "id": document_id,
+                    "name": _tag_untrusted(result.get("name", "")),
+                    "url": f"https://docs.google.com/document/d/{document_id}/edit",
+                    "tab_id": tab_id,
+                    "template_used": template_used,
+                }
+            )
+
+        # Full document update: generate .docx and replace via Drive API upload.
         docx_bytes = markdown_to_docx(markdown_content, styles)
         result = service.update_file_content(document_id, docx_bytes, _DOCX_MIME)
 
@@ -683,8 +718,14 @@ def register_google_docs_tools(
         document_id: str,
         markdown_content: str,
         template_name: str = "",
+        tab_id: str = "",
     ) -> str:
-        """Replace content of an existing Google Doc with styled markdown. Optionally apply template styling."""
+        """Replace content of an existing Google Doc with styled markdown. Use tab_id to update a specific tab without affecting other tabs. Without tab_id, replaces the entire document. Optionally apply template styling."""
         return _update_document_markdown(
-            service, template_config, document_id, markdown_content, template_name
+            service,
+            template_config,
+            document_id,
+            markdown_content,
+            template_name,
+            tab_id,
         )

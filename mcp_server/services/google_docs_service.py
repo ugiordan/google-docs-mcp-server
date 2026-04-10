@@ -759,6 +759,68 @@ class GoogleDocsService:
 
         return self._retry_on_429(_get_styles)
 
+    def update_tab_styled(self, doc_id, tab_id, batch_requests):
+        """Clear a tab and apply styled content via batchUpdate.
+
+        Args:
+            doc_id: The document ID
+            tab_id: The tab ID to update
+            batch_requests: List of batchUpdate request dicts from
+                blocks_to_batch_requests()
+
+        Returns:
+            Dictionary with id, name, url, and updatedTime
+        """
+
+        def _update():
+            # Get current tab content to find end index
+            doc = (
+                self.docs_service.documents()
+                .get(documentId=doc_id, includeTabsContent=True)
+                .execute()
+            )
+            end_index = self._get_tab_end_index(doc, tab_id)
+
+            requests = []
+
+            # Clear existing content first
+            if end_index > 1:
+                requests.append(
+                    {
+                        "deleteContentRange": {
+                            "range": {
+                                "startIndex": 1,
+                                "endIndex": end_index - 1,
+                                "tabId": tab_id,
+                            }
+                        }
+                    }
+                )
+
+            # Add the styled content requests
+            requests.extend(batch_requests)
+
+            if requests:
+                self.docs_service.documents().batchUpdate(
+                    documentId=doc_id, body={"requests": requests}
+                ).execute()
+
+            # Get updated metadata
+            file_metadata = (
+                self.drive_service.files()
+                .get(fileId=doc_id, fields="id,name,modifiedTime")
+                .execute()
+            )
+
+            return {
+                "id": file_metadata["id"],
+                "name": file_metadata["name"],
+                "url": f"https://docs.google.com/document/d/{doc_id}/edit",
+                "updatedTime": file_metadata.get("modifiedTime"),
+            }
+
+        return self._retry_on_429(_update)
+
     def batch_update(self, doc_id, requests):
         """Apply batch updates to a document.
 
