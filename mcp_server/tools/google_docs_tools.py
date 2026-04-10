@@ -186,6 +186,8 @@ def _comment_on_document(
     try:
         validate_document_id(document_id)
         validate_comment(comment)
+        if quoted_text:
+            validate_content_size(quoted_text, MAX_CONTENT_BYTES)
         result = service.comment_on_document(
             document_id, comment, quoted_text=quoted_text or None
         )
@@ -493,15 +495,16 @@ def _upload_document(
         effective_mime_type = mime_type or _DEFAULT_MIME_TYPE
         validate_mime_type(effective_mime_type)
 
-        max_b64_size = (MAX_UPLOAD_BYTES * 4 + 2) // 3  # base64 overhead
-        if len(file_content_base64) > max_b64_size:
-            return _error_response(
-                f"File content exceeds {MAX_UPLOAD_BYTES} bytes", "VALIDATION_ERROR"
-            )
         try:
             cleaned_b64 = (
                 file_content_base64.replace("\n", "").replace("\r", "").replace(" ", "")
             )
+            max_b64_size = (MAX_UPLOAD_BYTES * 4 + 2) // 3  # base64 overhead
+            if len(cleaned_b64) > max_b64_size:
+                return _error_response(
+                    f"File content exceeds {MAX_UPLOAD_BYTES} bytes",
+                    "VALIDATION_ERROR",
+                )
             file_bytes = base64.b64decode(cleaned_b64)
         except Exception:
             return _error_response("Invalid base64-encoded content", "VALIDATION_ERROR")
@@ -560,7 +563,7 @@ def _update_document_markdown(
 
         # Generate .docx and replace the document content via Drive API upload.
         docx_bytes = markdown_to_docx(markdown_content, styles)
-        service.update_file_content(document_id, docx_bytes, _DOCX_MIME)
+        result = service.update_file_content(document_id, docx_bytes, _DOCX_MIME)
 
         logger.info(
             "update_document_markdown: %s template=%s", document_id, template_used
@@ -568,6 +571,7 @@ def _update_document_markdown(
         return json.dumps(
             {
                 "id": document_id,
+                "name": _tag_untrusted(result.get("name", "")),
                 "url": f"https://docs.google.com/document/d/{document_id}/edit",
                 "template_used": template_used,
             }

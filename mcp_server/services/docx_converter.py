@@ -242,9 +242,9 @@ def _apply_template_styles(doc, styles):
         if "foreground_color" in props:
             color_data = props["foreground_color"]
             rgb = color_data.get("rgbColor", {})
-            r = int(rgb.get("red", 0) * 255)
-            g = int(rgb.get("green", 0) * 255)
-            b = int(rgb.get("blue", 0) * 255)
+            r = round(rgb.get("red", 0) * 255)
+            g = round(rgb.get("green", 0) * 255)
+            b = round(rgb.get("blue", 0) * 255)
             doc_style.font.color.rgb = RGBColor(r, g, b)
 
     # Override the document theme to prevent Calibri fallback
