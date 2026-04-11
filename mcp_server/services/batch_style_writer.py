@@ -121,7 +121,9 @@ def _build_text_segment_requests(blocks, start_index, tab_id):
             }
         }
     )
-    # 3. Clear direct character formatting
+    # 3. Clear direct character formatting.
+    # Exclude the final \n from character styling (idx-1) unless the segment
+    # is only a bare newline (idx == start_index+1), in which case cover it.
     text_end = idx - 1 if idx > start_index + 1 else idx
     requests.append(
         {
@@ -284,57 +286,57 @@ def _build_table_requests(block, start_index, tab_id):
     # insertTable at index N creates the TABLE element at N+1
     table_start = start_index + 1
 
-    # 2. Reset inherited styles on all cell paragraphs.
-    # Cells inherit paragraph + character styles from the insertion point,
-    # which may be a heading (bold, large font) left over after clearing the tab.
-    # Reset each cell to NORMAL_TEXT and clear direct character formatting.
-    for r in range(num_rows):
-        for c in range(num_cols):
+    # 2. Fill cells in reverse order (last row/col first).
+    # After inserting text, immediately reset inherited styles on that cell
+    # (paragraph NORMAL_TEXT + character formatting clear). Since we process
+    # in reverse, each cell's indices are stable at the time of reset.
+    # Header cells get bold re-applied after the reset.
+    has_header = block.get("has_header", False)
+    for r in range(num_rows - 1, -1, -1):
+        for c in range(num_cols - 1, -1, -1):
             ci = _cell_index(table_start, r, c, num_cols)
-            # Each empty cell paragraph is just \n at index ci, range [ci, ci+1)
+            cell_text = rows[r][c] if c < len(rows[r]) else ""
+
+            if cell_text:
+                requests.append(
+                    {
+                        "insertText": {
+                            "location": _location(ci, tab_id),
+                            "text": cell_text,
+                        }
+                    }
+                )
+
+            # Reset paragraph style (covers text + trailing \n)
+            text_len = _utf16_len(cell_text) if cell_text else 0
             requests.append(
                 {
                     "updateParagraphStyle": {
-                        "range": _build_range(ci, ci + 1, tab_id),
+                        "range": _build_range(ci, ci + text_len + 1, tab_id),
                         "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
                         "fields": "namedStyleType",
                     }
                 }
             )
-            requests.append(
-                {
-                    "updateTextStyle": {
-                        "range": _build_range(ci, ci + 1, tab_id),
-                        "textStyle": {},
-                        "fields": "bold,italic,strikethrough,underline,fontSize,"
-                        "weightedFontFamily,foregroundColor,link",
-                    }
-                }
-            )
-
-    # 3. Fill cells in reverse order (last row/col first) and style headers
-    has_header = block.get("has_header", False)
-    for r in range(num_rows - 1, -1, -1):
-        for c in range(num_cols - 1, -1, -1):
-            cell_text = rows[r][c] if c < len(rows[r]) else ""
-            if not cell_text:
-                continue
-            ci = _cell_index(table_start, r, c, num_cols)
-            requests.append(
-                {
-                    "insertText": {
-                        "location": _location(ci, tab_id),
-                        "text": cell_text,
-                    }
-                }
-            )
-            if r == 0 and has_header:
+            # Reset character formatting on text content
+            if text_len > 0:
                 requests.append(
                     {
                         "updateTextStyle": {
-                            "range": _build_range(
-                                ci, ci + _utf16_len(cell_text), tab_id
-                            ),
+                            "range": _build_range(ci, ci + text_len, tab_id),
+                            "textStyle": {},
+                            "fields": "bold,italic,strikethrough,underline,fontSize,"
+                            "weightedFontFamily,foregroundColor,link",
+                        }
+                    }
+                )
+
+            # Bold header cells after reset
+            if r == 0 and has_header and text_len > 0:
+                requests.append(
+                    {
+                        "updateTextStyle": {
+                            "range": _build_range(ci, ci + text_len, tab_id),
                             "textStyle": {"bold": True},
                             "fields": "bold",
                         }

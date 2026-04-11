@@ -698,3 +698,49 @@ class TestBlocksToBatchRequests:
             and r["updateParagraphStyle"]["paragraphStyle"].get("namedStyleType") == "NORMAL_TEXT"
         ]
         assert len(normal_text_reqs) == 4
+
+    def test_table_emoji_in_cells(self):
+        """Emoji in table cells should use correct UTF-16 length for ranges."""
+        blocks = [
+            {"type": "table", "rows": [["\U0001f389"]], "has_header": True}
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        bold_reqs = [
+            r for r in reqs
+            if "updateTextStyle" in r
+            and r["updateTextStyle"].get("textStyle", {}).get("bold")
+        ]
+        assert len(bold_reqs) == 1
+        # Emoji is 2 UTF-16 code units
+        r = bold_reqs[0]["updateTextStyle"]["range"]
+        assert r["endIndex"] - r["startIndex"] == 2
+
+    def test_table_header_with_empty_cell(self):
+        """Header row with empty cell skips bold for that cell."""
+        blocks = [
+            {"type": "table", "rows": [["A", ""], ["1", "2"]], "has_header": True}
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        bold_reqs = [
+            r for r in reqs
+            if "updateTextStyle" in r
+            and r["updateTextStyle"].get("textStyle", {}).get("bold")
+        ]
+        # Only "A" gets bold, empty cell skipped
+        assert len(bold_reqs) == 1
+
+    def test_custom_start_index(self):
+        """Non-default start_index offsets all indices correctly."""
+        blocks = [{"type": "paragraph", "text": "Hi", "runs": [{"text": "Hi"}]}]
+        reqs = blocks_to_batch_requests(blocks, start_index=5)
+        assert reqs[0]["insertText"]["location"]["index"] == 5
+        assert reqs[1]["updateParagraphStyle"]["range"]["startIndex"] == 5
+
+    def test_table_custom_start_index(self):
+        """Table with non-default start_index."""
+        blocks = [{"type": "table", "rows": [["X"]], "has_header": False}]
+        reqs = blocks_to_batch_requests(blocks, start_index=5)
+        assert reqs[0]["insertTable"]["location"]["index"] == 5
+        cell_insert = [r for r in reqs if "insertText" in r][0]
+        # table_start = 6, cell(0,0) = 6 + 3 = 9
+        assert cell_insert["insertText"]["location"]["index"] == 9
