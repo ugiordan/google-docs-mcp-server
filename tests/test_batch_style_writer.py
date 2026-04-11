@@ -665,15 +665,36 @@ class TestBlocksToBatchRequests:
         table_reqs = [r for r in reqs if "insertTable" in r]
         assert len(table_reqs) == 2
 
-    def test_table_only_no_text_resets(self):
-        """Table-only content has no NORMAL_TEXT or text style resets."""
+    def test_table_cells_get_style_resets(self):
+        """Table cells get NORMAL_TEXT and character style resets."""
         blocks = [
             {"type": "table", "rows": [["X"]], "has_header": False}
         ]
         reqs = blocks_to_batch_requests(blocks)
+        # 1 cell = 1 NORMAL_TEXT reset + 1 character reset
         normal_text_reqs = [
             r for r in reqs
             if "updateParagraphStyle" in r
             and r["updateParagraphStyle"]["paragraphStyle"].get("namedStyleType") == "NORMAL_TEXT"
         ]
-        assert len(normal_text_reqs) == 0
+        assert len(normal_text_reqs) == 1
+        char_resets = [
+            r for r in reqs
+            if "updateTextStyle" in r
+            and r["updateTextStyle"]["textStyle"] == {}
+        ]
+        assert len(char_resets) == 1
+
+    def test_table_multi_cell_resets(self):
+        """Each cell in the table gets its own style reset."""
+        blocks = [
+            {"type": "table", "rows": [["A", "B"], ["C", "D"]], "has_header": False}
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        # 4 cells = 4 NORMAL_TEXT resets + 4 character resets
+        normal_text_reqs = [
+            r for r in reqs
+            if "updateParagraphStyle" in r
+            and r["updateParagraphStyle"]["paragraphStyle"].get("namedStyleType") == "NORMAL_TEXT"
+        ]
+        assert len(normal_text_reqs) == 4

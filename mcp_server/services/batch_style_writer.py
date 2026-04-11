@@ -284,7 +284,35 @@ def _build_table_requests(block, start_index, tab_id):
     # insertTable at index N creates the TABLE element at N+1
     table_start = start_index + 1
 
-    # 2. Fill cells in reverse order (last row/col first) and style headers
+    # 2. Reset inherited styles on all cell paragraphs.
+    # Cells inherit paragraph + character styles from the insertion point,
+    # which may be a heading (bold, large font) left over after clearing the tab.
+    # Reset each cell to NORMAL_TEXT and clear direct character formatting.
+    for r in range(num_rows):
+        for c in range(num_cols):
+            ci = _cell_index(table_start, r, c, num_cols)
+            # Each empty cell paragraph is just \n at index ci, range [ci, ci+1)
+            requests.append(
+                {
+                    "updateParagraphStyle": {
+                        "range": _build_range(ci, ci + 1, tab_id),
+                        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                        "fields": "namedStyleType",
+                    }
+                }
+            )
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": _build_range(ci, ci + 1, tab_id),
+                        "textStyle": {},
+                        "fields": "bold,italic,strikethrough,underline,fontSize,"
+                        "weightedFontFamily,foregroundColor,link",
+                    }
+                }
+            )
+
+    # 3. Fill cells in reverse order (last row/col first) and style headers
     has_header = block.get("has_header", False)
     for r in range(num_rows - 1, -1, -1):
         for c in range(num_cols - 1, -1, -1):
