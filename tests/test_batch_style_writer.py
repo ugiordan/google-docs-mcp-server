@@ -1,6 +1,7 @@
 """Tests for mcp_server.services.batch_style_writer."""
 
 from mcp_server.services.batch_style_writer import (
+    _cell_index,
     _utf16_len,
     blocks_to_batch_requests,
 )
@@ -19,6 +20,35 @@ class TestUtf16Len:
 
     def test_mixed(self):
         assert _utf16_len("hi\U0001f389") == 4
+
+
+class TestCellIndex:
+    def test_first_cell(self):
+        # table_start + 3 + 0 + 0 = table_start + 3
+        assert _cell_index(2, 0, 0, 2) == 5
+
+    def test_second_col(self):
+        # table_start + 3 + 0 + 2 = table_start + 5
+        assert _cell_index(2, 0, 1, 2) == 7
+
+    def test_second_row_first_col(self):
+        # table_start + 3 + 1*(1+4) + 0 = table_start + 8
+        assert _cell_index(2, 1, 0, 2) == 10
+
+    def test_second_row_second_col(self):
+        # table_start + 3 + 1*(1+4) + 2 = table_start + 10
+        assert _cell_index(2, 1, 1, 2) == 12
+
+    def test_single_column(self):
+        # table_start + 3 + row*(1+2) + 0
+        assert _cell_index(2, 0, 0, 1) == 5
+        assert _cell_index(2, 1, 0, 1) == 8
+
+    def test_three_columns(self):
+        # table_start + 3 + 0 + 2*col
+        assert _cell_index(2, 0, 0, 3) == 5
+        assert _cell_index(2, 0, 1, 3) == 7
+        assert _cell_index(2, 0, 2, 3) == 9
 
 
 class TestBlocksToBatchRequests:
@@ -283,50 +313,64 @@ class TestBlocksToBatchRequests:
         assert len(bullet_reqs) == 1
         assert len(bold_reqs) == 1
 
-    # --- Table tests (text-formatted) ---
+    # --- Native table tests ---
 
-    def test_table_with_header(self):
+    def test_table_insert_table_request(self):
+        """Table block produces an insertTable request."""
+        blocks = [
+            {"type": "table", "rows": [["A", "B"], ["1", "2"]], "has_header": False}
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        insert_table = reqs[0]
+        assert "insertTable" in insert_table
+        assert insert_table["insertTable"]["rows"] == 2
+        assert insert_table["insertTable"]["columns"] == 2
+        assert insert_table["insertTable"]["location"]["index"] == 1
+
+    def test_table_cell_inserts_reverse_order(self):
+        """Cells are filled in reverse order (last cell first)."""
+        blocks = [
+            {"type": "table", "rows": [["A", "B"], ["1", "2"]], "has_header": False}
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        # reqs[0] = insertTable, reqs[1..4] = cell inserts in reverse
+        cell_inserts = [r for r in reqs if "insertText" in r]
+        assert len(cell_inserts) == 4
+        # Reverse order: (1,1), (1,0), (0,1), (0,0)
+        # table_start = 2, cell indices: (0,0)=5, (0,1)=7, (1,0)=10, (1,1)=12
+        assert cell_inserts[0]["insertText"]["location"]["index"] == 12  # (1,1)
+        assert cell_inserts[0]["insertText"]["text"] == "2"
+        assert cell_inserts[1]["insertText"]["location"]["index"] == 10  # (1,0)
+        assert cell_inserts[1]["insertText"]["text"] == "1"
+        assert cell_inserts[2]["insertText"]["location"]["index"] == 7  # (0,1)
+        assert cell_inserts[2]["insertText"]["text"] == "B"
+        assert cell_inserts[3]["insertText"]["location"]["index"] == 5  # (0,0)
+        assert cell_inserts[3]["insertText"]["text"] == "A"
+
+    def test_table_with_header_bold(self):
+        """Header row cells get bold styling."""
         blocks = [
             {"type": "table", "rows": [["A", "B"], ["1", "2"]], "has_header": True}
         ]
         reqs = blocks_to_batch_requests(blocks)
-        text = reqs[0]["insertText"]["text"]
-        assert "A" in text
-        assert "B" in text
-        assert "1" in text
-        assert "2" in text
-        assert "\u2500" in text  # separator line under header
-        # Should have monospace + bold header styles
-        monospace_reqs = [
-            r
-            for r in reqs
-            if "updateTextStyle" in r
-            and r["updateTextStyle"].get("textStyle", {}).get("weightedFontFamily")
-        ]
-        assert len(monospace_reqs) >= 1  # monospace for whole table
         bold_reqs = [
             r
             for r in reqs
             if "updateTextStyle" in r
             and r["updateTextStyle"].get("textStyle", {}).get("bold")
-            and r["updateTextStyle"].get("fields") == "bold"
         ]
-        assert len(bold_reqs) == 1  # bold header row
+        # Header has 2 cells, so 2 bold requests
+        assert len(bold_reqs) == 2
 
-    def test_table_no_header(self):
+    def test_table_no_header_no_bold(self):
+        """No header means no bold styling."""
         blocks = [{"type": "table", "rows": [["x", "y"]], "has_header": False}]
         reqs = blocks_to_batch_requests(blocks)
-        text = reqs[0]["insertText"]["text"]
-        assert "x" in text
-        assert "y" in text
-        assert "\u2500" not in text  # no separator
-        # Should have monospace but no bold
         bold_reqs = [
             r
             for r in reqs
             if "updateTextStyle" in r
             and r["updateTextStyle"].get("textStyle", {}).get("bold")
-            and r["updateTextStyle"].get("fields") == "bold"
         ]
         assert len(bold_reqs) == 0
 
@@ -335,23 +379,8 @@ class TestBlocksToBatchRequests:
         reqs = blocks_to_batch_requests(blocks)
         assert reqs == []
 
-    def test_table_column_alignment(self):
-        """Columns should be padded to equal width."""
-        blocks = [
-            {
-                "type": "table",
-                "rows": [["Short", "X"], ["LongerValue", "Y"]],
-                "has_header": False,
-            }
-        ]
-        reqs = blocks_to_batch_requests(blocks)
-        text = reqs[0]["insertText"]["text"]
-        lines = text.strip().split("\n")
-        # Both rows should have the same length due to padding
-        assert len(lines[0]) == len(lines[1])
-
     def test_table_jagged_rows(self):
-        """Rows with fewer columns than max should be padded."""
+        """Rows with fewer columns than max skip empty cells."""
         blocks = [
             {
                 "type": "table",
@@ -360,20 +389,27 @@ class TestBlocksToBatchRequests:
             }
         ]
         reqs = blocks_to_batch_requests(blocks)
-        text = reqs[0]["insertText"]["text"]
-        assert "A" in text
-        assert "1" in text
+        assert reqs[0]["insertTable"]["columns"] == 3
+        cell_inserts = [r for r in reqs if "insertText" in r]
+        # Row 0 has 3 cells, row 1 has 1 cell = 4 inserts
+        assert len(cell_inserts) == 4
+        # Row 1 cols 1,2 are empty strings so skipped
+        texts = [r["insertText"]["text"] for r in cell_inserts]
+        assert "A" in texts
+        assert "1" in texts
 
     def test_table_single_column(self):
         blocks = [{"type": "table", "rows": [["X"], ["Y"]], "has_header": False}]
         reqs = blocks_to_batch_requests(blocks)
-        text = reqs[0]["insertText"]["text"]
-        assert "X" in text
-        assert "Y" in text
-        # Single column, just values on each line
+        assert reqs[0]["insertTable"]["columns"] == 1
+        cell_inserts = [r for r in reqs if "insertText" in r]
+        assert len(cell_inserts) == 2
+        texts = [r["insertText"]["text"] for r in cell_inserts]
+        assert "X" in texts
+        assert "Y" in texts
 
     def test_table_with_text_before_and_after(self):
-        """Table between headings should all be in one insertText."""
+        """Table between text blocks: segments processed in reverse."""
         blocks = [
             {
                 "type": "heading",
@@ -389,11 +425,52 @@ class TestBlocksToBatchRequests:
             },
         ]
         reqs = blocks_to_batch_requests(blocks)
-        # All content in a single insertText
-        text = reqs[0]["insertText"]["text"]
-        assert "Before" in text
-        assert "A" in text
-        assert "After" in text
+        # 3 segments processed in reverse:
+        # 1. paragraph "After" text segment (insertText + NORMAL_TEXT + text reset)
+        # 2. table segment (insertTable + cell inserts)
+        # 3. heading "Before" text segment (insertText + NORMAL_TEXT + text reset + heading style)
+        # Paragraph segment first (reverse order)
+        assert reqs[0]["insertText"]["text"] == "After\n"
+        # Table segment
+        table_reqs = [r for r in reqs if "insertTable" in r]
+        assert len(table_reqs) == 1
+        # Heading segment last
+        heading_inserts = [
+            r for r in reqs if "insertText" in r and r["insertText"]["text"] == "Before\n"
+        ]
+        assert len(heading_inserts) == 1
+
+    def test_table_header_bold_indices(self):
+        """Bold header styling has correct index range."""
+        blocks = [
+            {"type": "table", "rows": [["Hi", "World"], ["a", "b"]], "has_header": True}
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        bold_reqs = [
+            r
+            for r in reqs
+            if "updateTextStyle" in r
+            and r["updateTextStyle"].get("textStyle", {}).get("bold")
+        ]
+        assert len(bold_reqs) == 2
+        # Cell (0,1) processed before (0,0) in reverse
+        # cell(0,1) at index 7, "World" = 5 chars -> range [7, 12)
+        # cell(0,0) at index 5, "Hi" = 2 chars -> range [5, 7)
+        ranges = [(r["updateTextStyle"]["range"]["startIndex"],
+                    r["updateTextStyle"]["range"]["endIndex"]) for r in bold_reqs]
+        assert (7, 12) in ranges  # "World"
+        assert (5, 7) in ranges   # "Hi"
+
+    def test_table_empty_cells_skipped(self):
+        """Empty string cells don't produce insertText requests."""
+        blocks = [
+            {"type": "table", "rows": [["A", ""], ["", "D"]], "has_header": False}
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        cell_inserts = [r for r in reqs if "insertText" in r]
+        assert len(cell_inserts) == 2
+        texts = {r["insertText"]["text"] for r in cell_inserts}
+        assert texts == {"A", "D"}
 
     # --- Tab ID scoping tests ---
 
@@ -447,6 +524,16 @@ class TestBlocksToBatchRequests:
         reqs = blocks_to_batch_requests(blocks, tab_id="t1")
         bullet_req = [r for r in reqs if "createParagraphBullets" in r][0]
         assert bullet_req["createParagraphBullets"]["range"]["tabId"] == "t1"
+
+    def test_tab_id_on_table(self):
+        """Table insertTable and cell inserts include tabId."""
+        blocks = [
+            {"type": "table", "rows": [["X"]], "has_header": False}
+        ]
+        reqs = blocks_to_batch_requests(blocks, tab_id="t1")
+        assert reqs[0]["insertTable"]["location"]["tabId"] == "t1"
+        cell_insert = [r for r in reqs if "insertText" in r][0]
+        assert cell_insert["insertText"]["location"]["tabId"] == "t1"
 
     # --- Mixed content tests ---
 
@@ -547,3 +634,46 @@ class TestBlocksToBatchRequests:
         ]
         reqs = blocks_to_batch_requests(blocks)
         assert reqs[0]["insertText"]["text"] == "hello\n"
+
+    def test_mixed_text_and_table(self):
+        """Text-table-text produces three segments in correct reverse order."""
+        blocks = [
+            {"type": "paragraph", "text": "Top", "runs": [{"text": "Top"}]},
+            {"type": "table", "rows": [["A"]], "has_header": False},
+            {"type": "paragraph", "text": "Bottom", "runs": [{"text": "Bottom"}]},
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        # Reverse order: Bottom text segment, table, Top text segment
+        # Bottom segment first
+        assert reqs[0]["insertText"]["text"] == "Bottom\n"
+        # Table somewhere in the middle
+        table_reqs = [r for r in reqs if "insertTable" in r]
+        assert len(table_reqs) == 1
+        # Top segment last
+        top_inserts = [
+            r for r in reqs if "insertText" in r and r["insertText"]["text"] == "Top\n"
+        ]
+        assert len(top_inserts) == 1
+
+    def test_consecutive_tables(self):
+        """Multiple tables each get their own insertTable."""
+        blocks = [
+            {"type": "table", "rows": [["A"]], "has_header": False},
+            {"type": "table", "rows": [["B"]], "has_header": False},
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        table_reqs = [r for r in reqs if "insertTable" in r]
+        assert len(table_reqs) == 2
+
+    def test_table_only_no_text_resets(self):
+        """Table-only content has no NORMAL_TEXT or text style resets."""
+        blocks = [
+            {"type": "table", "rows": [["X"]], "has_header": False}
+        ]
+        reqs = blocks_to_batch_requests(blocks)
+        normal_text_reqs = [
+            r for r in reqs
+            if "updateParagraphStyle" in r
+            and r["updateParagraphStyle"]["paragraphStyle"].get("namedStyleType") == "NORMAL_TEXT"
+        ]
+        assert len(normal_text_reqs) == 0

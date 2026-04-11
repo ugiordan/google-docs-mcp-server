@@ -1,12 +1,14 @@
 """Convert parsed markdown blocks to Google Docs batchUpdate requests.
 
 Translates block/run structures from the markdown parser into insertText,
-updateParagraphStyle, updateTextStyle, and createParagraphBullets requests.
-This allows styled content to be written to individual tabs without replacing
-the entire document (which is what .docx upload does).
+updateParagraphStyle, updateTextStyle, createParagraphBullets, and insertTable
+requests. This allows styled content to be written to individual tabs without
+replacing the entire document (which is what .docx upload does).
 
-All text (including tables rendered as aligned text) is inserted in a single
-insertText call, then paragraph/text/bullet styles are applied by index range.
+Content is split into text segments (headings, paragraphs, code blocks, etc.)
+and table segments. Segments are processed in reverse document order, each
+inserting at start_index, so they push earlier-inserted content forward.
+This avoids cross-segment index dependencies.
 """
 
 
@@ -41,20 +43,22 @@ def _location(index, tab_id=None):
     return loc
 
 
-def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
-    """Convert parsed markdown blocks to Google Docs batchUpdate requests.
+def _cell_index(table_start, row, col, num_cols):
+    """Paragraph index of cell (row, col) in an empty table.
 
-    Args:
-        blocks: List of parsed markdown blocks from parse_markdown()
-        tab_id: Optional tab ID to scope all requests to a specific tab
-        start_index: Document index to start inserting at (default: 1)
-
-    Returns:
-        List of batchUpdate request dicts ready for the API.
+    Table structure per row: ROW_START + (CELL_START + PARAGRAPH) * num_cols.
+    First cell paragraph is at table_start + 3 (TABLE + ROW + CELL + PARAGRAPH
+    where PARAGRAPH is the target index).
     """
-    if not blocks:
-        return []
+    return table_start + 3 + row * (1 + 2 * num_cols) + 2 * col
 
+
+def _build_text_segment_requests(blocks, start_index, tab_id):
+    """Build requests for a consecutive run of non-table blocks.
+
+    Produces a single insertText with all text, then style resets, then
+    paragraph and character style requests.
+    """
     text_parts = []
     block_ranges = []
     run_ranges = []
@@ -96,38 +100,6 @@ def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
             idx += _utf16_len(separator)
             block_ranges.append((block_start, idx, btype, block))
 
-        elif btype == "table":
-            rows = block.get("rows", [])
-            if not rows:
-                continue
-            block_start = idx
-            col_widths = []
-            for row in rows:
-                for j, cell in enumerate(row):
-                    width = _utf16_len(cell)
-                    if j >= len(col_widths):
-                        col_widths.append(width)
-                    else:
-                        col_widths[j] = max(col_widths[j], width)
-
-            col_gap = 3  # spaces between columns
-            for i, row in enumerate(rows):
-                cells = []
-                for j, cell in enumerate(row):
-                    pad = col_widths[j] if j < len(col_widths) else _utf16_len(cell)
-                    cells.append(cell + " " * (pad - _utf16_len(cell)))
-                row_text = (" " * col_gap).join(cells) + "\n"
-                text_parts.append(row_text)
-                idx += _utf16_len(row_text)
-
-                if i == 0 and block.get("has_header"):
-                    total_width = sum(col_widths) + col_gap * (len(col_widths) - 1)
-                    sep_text = "\u2500" * total_width + "\n"
-                    text_parts.append(sep_text)
-                    idx += _utf16_len(sep_text)
-
-            block_ranges.append((block_start, idx, btype, block))
-
     full_text = "".join(text_parts)
     if not full_text:
         return []
@@ -139,11 +111,7 @@ def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
         {"insertText": {"location": _location(start_index, tab_id), "text": full_text}}
     )
 
-    # 2. Reset all styles to clean baseline.
-    # Inserted text inherits both paragraph and character styles from the
-    # insertion point, which may be a heading left over after clearing the tab.
-    # Reset paragraph style to NORMAL_TEXT and clear all direct text formatting,
-    # then apply specific styles on top.
+    # 2. Reset paragraph styles to NORMAL_TEXT
     requests.append(
         {
             "updateParagraphStyle": {
@@ -153,8 +121,7 @@ def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
             }
         }
     )
-    # Clear direct character formatting (bold, italic, font size, etc.)
-    # so text renders according to the named style, not inherited formatting.
+    # 3. Clear direct character formatting
     text_end = idx - 1 if idx > start_index + 1 else idx
     requests.append(
         {
@@ -167,7 +134,7 @@ def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
         }
     )
 
-    # 3. Apply paragraph styles
+    # 4. Apply paragraph styles
     for start, end, btype, block in block_ranges:
         if btype == "heading":
             level = block.get("level", 1)
@@ -245,46 +212,7 @@ def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
                 }
             )
 
-        elif btype == "table":
-            # Apply monospace font so columns align properly
-            if end - 1 > start:
-                requests.append(
-                    {
-                        "updateTextStyle": {
-                            "range": _build_range(start, end - 1, tab_id),
-                            "textStyle": {
-                                "weightedFontFamily": {"fontFamily": "Courier New"},
-                                "fontSize": {"magnitude": 9, "unit": "PT"},
-                            },
-                            "fields": "weightedFontFamily,fontSize",
-                        }
-                    }
-                )
-            # Bold the header row
-            rows = block.get("rows", [])
-            if block.get("has_header") and rows:
-                col_gap = 3
-                padded = []
-                for j, cell in enumerate(rows[0]):
-                    w = _utf16_len(cell)
-                    cw = 0
-                    for row in rows:
-                        if j < len(row):
-                            cw = max(cw, _utf16_len(row[j]))
-                    padded.append(cell + " " * (cw - w))
-                first_row_text = (" " * col_gap).join(padded) + "\n"
-                header_end = start + _utf16_len(first_row_text)
-                requests.append(
-                    {
-                        "updateTextStyle": {
-                            "range": _build_range(start, header_end, tab_id),
-                            "textStyle": {"bold": True},
-                            "fields": "bold",
-                        }
-                    }
-                )
-
-    # 4. Apply text styles (bold, italic, code, strikethrough, links)
+    # 5. Apply text styles (bold, italic, code, strikethrough, links)
     for start, end, run_data in run_ranges:
         if start >= end:
             continue
@@ -319,5 +247,117 @@ def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
                     }
                 }
             )
+
+    return requests
+
+
+def _build_table_requests(block, start_index, tab_id):
+    """Build requests for a native Google Doc table.
+
+    Uses insertTable to create the table structure, then fills cells with
+    insertText in reverse order (last cell first) so each insertion doesn't
+    shift indices of cells we haven't processed yet. Header cells get bold
+    styling applied immediately after their text insertion.
+    """
+    rows = block.get("rows", [])
+    if not rows:
+        return []
+
+    num_rows = len(rows)
+    num_cols = max((len(r) for r in rows), default=0)
+    if num_cols == 0:
+        return []
+
+    requests = []
+
+    # 1. Insert empty table
+    requests.append(
+        {
+            "insertTable": {
+                "rows": num_rows,
+                "columns": num_cols,
+                "location": _location(start_index, tab_id),
+            }
+        }
+    )
+
+    # insertTable at index N creates the TABLE element at N+1
+    table_start = start_index + 1
+
+    # 2. Fill cells in reverse order (last row/col first) and style headers
+    has_header = block.get("has_header", False)
+    for r in range(num_rows - 1, -1, -1):
+        for c in range(num_cols - 1, -1, -1):
+            cell_text = rows[r][c] if c < len(rows[r]) else ""
+            if not cell_text:
+                continue
+            ci = _cell_index(table_start, r, c, num_cols)
+            requests.append(
+                {
+                    "insertText": {
+                        "location": _location(ci, tab_id),
+                        "text": cell_text,
+                    }
+                }
+            )
+            if r == 0 and has_header:
+                requests.append(
+                    {
+                        "updateTextStyle": {
+                            "range": _build_range(
+                                ci, ci + _utf16_len(cell_text), tab_id
+                            ),
+                            "textStyle": {"bold": True},
+                            "fields": "bold",
+                        }
+                    }
+                )
+
+    return requests
+
+
+def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
+    """Convert parsed markdown blocks to Google Docs batchUpdate requests.
+
+    Splits blocks into text segments (headings, paragraphs, code blocks, etc.)
+    and table segments. Segments are processed in reverse document order, each
+    inserting at start_index. This means each segment's internal index
+    calculations are independent: no segment needs to know another's size.
+
+    Args:
+        blocks: List of parsed markdown blocks from parse_markdown()
+        tab_id: Optional tab ID to scope all requests to a specific tab
+        start_index: Document index to start inserting at (default: 1)
+
+    Returns:
+        List of batchUpdate request dicts ready for the API.
+    """
+    if not blocks:
+        return []
+
+    # Split into text and table segments
+    segments = []
+    current_text_blocks = []
+    for block in blocks:
+        if block["type"] == "table":
+            if current_text_blocks:
+                segments.append(("text", current_text_blocks))
+                current_text_blocks = []
+            segments.append(("table", block))
+        else:
+            current_text_blocks.append(block)
+    if current_text_blocks:
+        segments.append(("text", current_text_blocks))
+
+    # Process in reverse document order so each segment inserts at start_index
+    # and pushes previously-inserted content forward
+    requests = []
+    for seg_type, seg_data in reversed(segments):
+        if seg_type == "text":
+            requests.extend(
+                _build_text_segment_requests(seg_data, start_index, tab_id)
+            )
+        else:
+            requests.extend(_build_table_requests(seg_data, start_index, tab_id))
 
     return requests
