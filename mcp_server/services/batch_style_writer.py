@@ -152,6 +152,28 @@ def _build_text_segment_requests(blocks, start_index, tab_id):
             )
 
         elif btype == "code_block":
+            # Gray background on the paragraph (similar to Code Blocks add-on)
+            requests.append(
+                {
+                    "updateParagraphStyle": {
+                        "range": _build_range(start, end, tab_id),
+                        "paragraphStyle": {
+                            "shading": {
+                                "backgroundColor": {
+                                    "color": {
+                                        "rgbColor": {
+                                            "red": 0.95,
+                                            "green": 0.95,
+                                            "blue": 0.95,
+                                        }
+                                    }
+                                }
+                            },
+                        },
+                        "fields": "shading",
+                    }
+                }
+            )
             if end - 1 > start:
                 requests.append(
                     {

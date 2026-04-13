@@ -303,7 +303,7 @@ class _MarkdownHTMLParser(HTMLParser):
             # nl2br produces "<br />\n" in HTML. The <br> handler already
             # emits a \v soft break, so strip the trailing \n from data
             # to avoid a double line break (one soft + one paragraph).
-            data = data.replace("\n", " ")
+            data = data.replace("\n", "")
             run = self._make_run(data)
             if run:
                 self.current_runs.append(run)

@@ -172,9 +172,18 @@ class TestBlocksToBatchRequests:
     def test_code_block(self):
         blocks = [{"type": "code_block", "text": "x = 1"}]
         reqs = blocks_to_batch_requests(blocks)
-        # insertText + NORMAL_TEXT + text reset + updateTextStyle for monospace
-        assert len(reqs) == 4
-        style_req = reqs[3]["updateTextStyle"]
+        # insertText + NORMAL_TEXT + text reset + shading + updateTextStyle for monospace
+        assert len(reqs) == 5
+        # Shading request (gray background)
+        shading_req = reqs[3]["updateParagraphStyle"]
+        bg = shading_req["paragraphStyle"]["shading"]["backgroundColor"]["color"][
+            "rgbColor"
+        ]
+        assert bg["red"] == 0.95
+        assert bg["green"] == 0.95
+        assert bg["blue"] == 0.95
+        # Monospace font request
+        style_req = reqs[4]["updateTextStyle"]
         assert (
             style_req["textStyle"]["weightedFontFamily"]["fontFamily"] == "Courier New"
         )
