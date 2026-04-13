@@ -185,6 +185,31 @@ class TestParseMarkdown:
         assert any(r.get("bold") for r in runs)
         assert any(r.get("italic") for r in runs)
 
+    def test_backslash_line_break(self):
+        """Backslash at end of line produces a soft break (vertical tab)."""
+        blocks = parse_markdown("Line one\\\nLine two")
+        assert len(blocks) == 1
+        text = blocks[0]["text"]
+        assert "\v" in text
+        assert "Line one" in text
+        assert "Line two" in text
+
+    def test_br_tag_line_break(self):
+        """<br> in markdown source produces a soft break (vertical tab)."""
+        # <br> tags are preserved by the HTML sanitizer
+        blocks = parse_markdown("Line one<br>Line two")
+        assert len(blocks) == 1
+        text = blocks[0]["text"]
+        assert "\v" in text
+
+    def test_html_tags_stripped_except_br(self):
+        """Raw HTML tags are stripped but <br> is preserved."""
+        blocks = parse_markdown("<div>hello</div><br>world")
+        text = "".join(b.get("text", "") for b in blocks)
+        assert "hello" in text
+        assert "world" in text
+        assert "<div>" not in text
+
 
 # ---------------------------------------------------------------------------
 # extract_template_styles

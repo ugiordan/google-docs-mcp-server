@@ -210,9 +210,12 @@ class _MarkdownHTMLParser(HTMLParser):
                     self.current_runs.append(run)
         elif tag == "br":
             if self.in_table and self.in_cell:
-                self.cell_text_parts.append("\n")
+                self.cell_text_parts.append(" ")
             elif self.block_type:
-                run = self._make_run("\n")
+                # Use vertical tab (\v) for soft line break within a paragraph.
+                # Google Docs renders \v as a line break without paragraph spacing,
+                # unlike \n which creates a new paragraph.
+                run = self._make_run("\v")
                 if run:
                     self.current_runs.append(run)
 
@@ -297,6 +300,10 @@ class _MarkdownHTMLParser(HTMLParser):
             self.cell_text_parts.append(data)
             return
         if self.block_type:
+            # nl2br produces "<br />\n" in HTML. The <br> handler already
+            # emits a \v soft break, so strip the trailing \n from data
+            # to avoid a double line break (one soft + one paragraph).
+            data = data.replace("\n", " ")
             run = self._make_run(data)
             if run:
                 self.current_runs.append(run)
@@ -315,8 +322,12 @@ def parse_markdown(content: str) -> list[dict]:
         extensions=["tables", "fenced_code", "toc", "nl2br"],
         output_format="html",
     )
-    # Strip any raw HTML tags from input before conversion
-    content = re.sub(r"<[^>]+>", "", content)
+    # Strip raw HTML tags from input, but preserve <br> for line breaks
+    content = re.sub(r"<(?!br\s*/?\s*>)[^>]+>", "", content)
+    # Strip trailing backslashes used as markdown line breaks.
+    # With nl2br enabled, every newline already becomes <br>, so the
+    # backslash is redundant and would render as a literal "\" character.
+    content = re.sub(r"\\\n", "\n", content)
     html = md.convert(content)
 
     parser = _MarkdownHTMLParser()
