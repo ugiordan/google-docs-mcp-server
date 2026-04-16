@@ -633,6 +633,90 @@ class GoogleDocsService:
 
         return self._retry_on_429(_list_comments)
 
+    def reply_to_comment(self, doc_id, comment_id, reply_text):
+        """Reply to an existing comment.
+
+        Args:
+            doc_id: The file ID
+            comment_id: The comment ID to reply to
+            reply_text: Reply text content
+
+        Returns:
+            Dictionary with reply_id, comment_id, and content
+        """
+
+        def _reply():
+            body = {"content": reply_text}
+            response = (
+                self.drive_service.replies()
+                .create(
+                    fileId=doc_id,
+                    commentId=comment_id,
+                    body=body,
+                    fields="id,content",
+                )
+                .execute()
+            )
+            return {
+                "reply_id": response["id"],
+                "comment_id": comment_id,
+                "document_id": doc_id,
+                "content": response["content"],
+            }
+
+        return self._retry_on_429(_reply)
+
+    def resolve_comment(self, doc_id, comment_id):
+        """Mark a comment as resolved.
+
+        Args:
+            doc_id: The file ID
+            comment_id: The comment ID to resolve
+
+        Returns:
+            Dictionary with comment_id, document_id, and resolved status
+        """
+
+        def _resolve():
+            # Replying with action "resolve" resolves the comment
+            body = {"content": "", "action": "resolve"}
+            self.drive_service.replies().create(
+                fileId=doc_id,
+                commentId=comment_id,
+                body=body,
+                fields="id",
+            ).execute()
+            return {
+                "comment_id": comment_id,
+                "document_id": doc_id,
+                "resolved": True,
+            }
+
+        return self._retry_on_429(_resolve)
+
+    def delete_comment(self, doc_id, comment_id):
+        """Delete a comment.
+
+        Args:
+            doc_id: The file ID
+            comment_id: The comment ID to delete
+
+        Returns:
+            Dictionary with comment_id and document_id
+        """
+
+        def _delete():
+            self.drive_service.comments().delete(
+                fileId=doc_id, commentId=comment_id
+            ).execute()
+            return {
+                "comment_id": comment_id,
+                "document_id": doc_id,
+                "status": "deleted",
+            }
+
+        return self._retry_on_429(_delete)
+
     def find_folder(self, folder_name):
         """Find a folder by name.
 

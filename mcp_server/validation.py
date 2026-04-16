@@ -74,6 +74,17 @@ def validate_comment(comment: str) -> bool:
     return True
 
 
+def validate_comment_id(comment_id: str) -> bool:
+    if not comment_id or not comment_id.strip():
+        raise ValueError("Comment ID cannot be empty")
+    # Drive API comment IDs are typically alphanumeric strings
+    if not re.match(r"^[a-zA-Z0-9_-]{1,100}$", comment_id):
+        raise ValueError(
+            "Invalid comment ID format: must be 1-100 alphanumeric characters, hyphens, or underscores"
+        )
+    return True
+
+
 def validate_template_name(name: str, available: list[str]) -> bool:
     if name not in available:
         raise ValueError(

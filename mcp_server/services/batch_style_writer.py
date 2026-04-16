@@ -92,6 +92,12 @@ def _build_text_segment_requests(blocks, start_index, tab_id):
             text_parts.append("\n")
             idx += 1
             block_ranges.append((block_start, idx, btype, block))
+            # Spacer line after code block for visual separation.
+            # Tracked separately so we can style it with tiny font.
+            spacer_start = idx
+            text_parts.append("\n")
+            idx += 1
+            block_ranges.append((spacer_start, idx, "code_spacer", {}))
 
         elif btype == "horizontal_rule":
             separator = "\u2500" * 40 + "\n"
@@ -152,7 +158,7 @@ def _build_text_segment_requests(blocks, start_index, tab_id):
             )
 
         elif btype == "code_block":
-            # Gray background on the paragraph (similar to Code Blocks add-on)
+            # Gray background + zero paragraph spacing for tight code lines
             requests.append(
                 {
                     "updateParagraphStyle": {
@@ -169,8 +175,11 @@ def _build_text_segment_requests(blocks, start_index, tab_id):
                                     }
                                 }
                             },
+                            "spaceAbove": {"magnitude": 0, "unit": "PT"},
+                            "spaceBelow": {"magnitude": 0, "unit": "PT"},
+                            "lineSpacing": 100,
                         },
-                        "fields": "shading",
+                        "fields": "shading,spaceAbove,spaceBelow,lineSpacing",
                     }
                 }
             )
@@ -180,10 +189,19 @@ def _build_text_segment_requests(blocks, start_index, tab_id):
                         "updateTextStyle": {
                             "range": _build_range(start, end - 1, tab_id),
                             "textStyle": {
-                                "weightedFontFamily": {"fontFamily": "Courier New"},
+                                "weightedFontFamily": {"fontFamily": "Roboto Mono"},
                                 "fontSize": {"magnitude": 9, "unit": "PT"},
+                                "foregroundColor": {
+                                    "color": {
+                                        "rgbColor": {
+                                            "red": 0.0,
+                                            "green": 0.44,
+                                            "blue": 0.0,
+                                        }
+                                    }
+                                },
                             },
-                            "fields": "weightedFontFamily,fontSize",
+                            "fields": "weightedFontFamily,fontSize,foregroundColor",
                         }
                     }
                 )
@@ -236,6 +254,35 @@ def _build_text_segment_requests(blocks, start_index, tab_id):
                 }
             )
 
+        elif btype == "code_spacer":
+            # Spacer paragraph after code blocks: clears gray shading
+            # and adds visible separation via spaceAbove.
+            requests.append(
+                {
+                    "updateParagraphStyle": {
+                        "range": _build_range(start, end, tab_id),
+                        "paragraphStyle": {
+                            "shading": {"backgroundColor": {}},
+                            "spaceAbove": {"magnitude": 8, "unit": "PT"},
+                            "spaceBelow": {"magnitude": 0, "unit": "PT"},
+                            "lineSpacing": 100,
+                        },
+                        "fields": "shading,spaceAbove,spaceBelow,lineSpacing",
+                    }
+                }
+            )
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": _build_range(start, end, tab_id),
+                        "textStyle": {
+                            "fontSize": {"magnitude": 1, "unit": "PT"},
+                        },
+                        "fields": "fontSize",
+                    }
+                }
+            )
+
     # 5. Apply text styles (bold, italic, code, strikethrough, links)
     for start, end, run_data in run_ranges:
         if start >= end:
@@ -254,9 +301,12 @@ def _build_text_segment_requests(blocks, start_index, tab_id):
             text_style["strikethrough"] = True
             style_fields.append("strikethrough")
         if run_data.get("code"):
-            text_style["weightedFontFamily"] = {"fontFamily": "Courier New"}
+            text_style["weightedFontFamily"] = {"fontFamily": "Roboto Mono"}
             text_style["fontSize"] = {"magnitude": 9, "unit": "PT"}
-            style_fields.extend(["weightedFontFamily", "fontSize"])
+            text_style["foregroundColor"] = {
+                "color": {"rgbColor": {"red": 0.0, "green": 0.44, "blue": 0.0}}
+            }
+            style_fields.extend(["weightedFontFamily", "fontSize", "foregroundColor"])
         if run_data.get("link"):
             text_style["link"] = {"url": run_data["link"]}
             style_fields.append("link")
@@ -301,6 +351,34 @@ def _build_table_requests(block, start_index, tab_id):
                 "rows": num_rows,
                 "columns": num_cols,
                 "location": _location(start_index, tab_id),
+            }
+        }
+    )
+
+    # insertTable auto-creates a \n before the table at start_index.
+    # Minimize it: zero spacing + tiny font so it's nearly invisible.
+    requests.append(
+        {
+            "updateParagraphStyle": {
+                "range": _build_range(start_index, start_index + 1, tab_id),
+                "paragraphStyle": {
+                    "namedStyleType": "NORMAL_TEXT",
+                    "spaceAbove": {"magnitude": 0, "unit": "PT"},
+                    "spaceBelow": {"magnitude": 0, "unit": "PT"},
+                    "lineSpacing": 100,
+                },
+                "fields": "namedStyleType,spaceAbove,spaceBelow,lineSpacing",
+            }
+        }
+    )
+    requests.append(
+        {
+            "updateTextStyle": {
+                "range": _build_range(start_index, start_index + 1, tab_id),
+                "textStyle": {
+                    "fontSize": {"magnitude": 1, "unit": "PT"},
+                },
+                "fields": "fontSize",
             }
         }
     )
@@ -406,10 +484,49 @@ def blocks_to_batch_requests(blocks, tab_id=None, start_index=1):
     requests = []
     for seg_type, seg_data in reversed(segments):
         if seg_type == "text":
-            requests.extend(
-                _build_text_segment_requests(seg_data, start_index, tab_id)
-            )
+            requests.extend(_build_text_segment_requests(seg_data, start_index, tab_id))
         else:
-            requests.extend(_build_table_requests(seg_data, start_index, tab_id))
+            table_reqs = _build_table_requests(seg_data, start_index, tab_id)
+            if table_reqs:
+                # Insert a \n that will appear after the table in document
+                # order. Inserted before the table in request order so the
+                # table pushes it forward. Reset its style to prevent
+                # inheriting shading from adjacent code blocks.
+                requests.append(
+                    {
+                        "insertText": {
+                            "location": _location(start_index, tab_id),
+                            "text": "\n",
+                        }
+                    }
+                )
+                requests.append(
+                    {
+                        "updateParagraphStyle": {
+                            "range": _build_range(start_index, start_index + 1, tab_id),
+                            "paragraphStyle": {
+                                "namedStyleType": "NORMAL_TEXT",
+                                "shading": {"backgroundColor": {}},
+                                "spaceAbove": {"magnitude": 8, "unit": "PT"},
+                                "spaceBelow": {"magnitude": 0, "unit": "PT"},
+                                "lineSpacing": 100,
+                            },
+                            "fields": "namedStyleType,shading,"
+                            "spaceAbove,spaceBelow,lineSpacing",
+                        }
+                    }
+                )
+                requests.append(
+                    {
+                        "updateTextStyle": {
+                            "range": _build_range(start_index, start_index + 1, tab_id),
+                            "textStyle": {
+                                "fontSize": {"magnitude": 1, "unit": "PT"},
+                            },
+                            "fields": "fontSize",
+                        }
+                    }
+                )
+            requests.extend(table_reqs)
 
     return requests

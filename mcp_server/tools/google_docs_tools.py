@@ -22,6 +22,7 @@ from mcp_server.validation import (
     MAX_MARKDOWN_BYTES,
     MAX_UPLOAD_BYTES,
     validate_comment,
+    validate_comment_id,
     validate_content_size,
     validate_document_id,
     validate_folder_id,
@@ -203,6 +204,90 @@ def _comment_on_document(
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
         return _handle_api_error(e, "comment_on_document")
+
+
+def _list_comments(service: GoogleDocsService, document_id: str) -> str:
+    """List all comments on a document with replies."""
+    try:
+        validate_document_id(document_id)
+        comments = service.list_comments(document_id)
+        for c in comments:
+            if "author" in c:
+                c["author"] = _tag_untrusted(c["author"])
+            if "content" in c:
+                c["content"] = _tag_untrusted(c["content"])
+            if "quoted_text" in c:
+                c["quoted_text"] = _tag_untrusted(c["quoted_text"])
+            for r in c.get("replies", []):
+                if "author" in r:
+                    r["author"] = _tag_untrusted(r["author"])
+                if "content" in r:
+                    r["content"] = _tag_untrusted(r["content"])
+        result = {
+            "document_id": document_id,
+            "comment_count": len(comments),
+            "comments": comments,
+        }
+        logger.info("list_comments: %s (%d comments)", document_id, len(comments))
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "list_comments")
+
+
+def _reply_to_comment(
+    service: GoogleDocsService,
+    document_id: str,
+    comment_id: str,
+    reply: str,
+) -> str:
+    """Reply to an existing comment on a document."""
+    try:
+        validate_document_id(document_id)
+        validate_comment_id(comment_id)
+        validate_comment(reply)
+        result = service.reply_to_comment(document_id, comment_id, reply)
+        if "content" in result:
+            result["content"] = _tag_untrusted(result["content"])
+        logger.info("reply_to_comment: %s on %s", comment_id, document_id)
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "reply_to_comment")
+
+
+def _resolve_comment(
+    service: GoogleDocsService, document_id: str, comment_id: str
+) -> str:
+    """Mark a comment as resolved."""
+    try:
+        validate_document_id(document_id)
+        validate_comment_id(comment_id)
+        result = service.resolve_comment(document_id, comment_id)
+        logger.info("resolve_comment: %s on %s", comment_id, document_id)
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "resolve_comment")
+
+
+def _delete_comment(
+    service: GoogleDocsService, document_id: str, comment_id: str
+) -> str:
+    """Delete a comment from a document."""
+    try:
+        validate_document_id(document_id)
+        validate_comment_id(comment_id)
+        result = service.delete_comment(document_id, comment_id)
+        logger.info("delete_comment: %s from %s", comment_id, document_id)
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "delete_comment")
 
 
 def _find_folder(service: GoogleDocsService, folder_name: str) -> str:
@@ -668,6 +753,26 @@ def register_google_docs_tools(
     ) -> str:
         """Add a comment to a Google Doc. Optionally anchor to specific text."""
         return _comment_on_document(service, document_id, comment, quoted_text)
+
+    @mcp.tool()
+    def list_comments(document_id: str) -> str:
+        """List all comments on a document, including replies, authors, and resolved status."""
+        return _list_comments(service, document_id)
+
+    @mcp.tool()
+    def reply_to_comment(document_id: str, comment_id: str, reply: str) -> str:
+        """Reply to an existing comment on a document."""
+        return _reply_to_comment(service, document_id, comment_id, reply)
+
+    @mcp.tool()
+    def resolve_comment(document_id: str, comment_id: str) -> str:
+        """Mark a comment as resolved."""
+        return _resolve_comment(service, document_id, comment_id)
+
+    @mcp.tool()
+    def delete_comment(document_id: str, comment_id: str) -> str:
+        """Delete a comment from a document. IMPORTANT: Always confirm with the user before deleting."""
+        return _delete_comment(service, document_id, comment_id)
 
     @mcp.tool()
     def find_folder(folder_name: str) -> str:

@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that provides Google Docs read and write o
 
 ## Features
 
-- 14 tools for document lifecycle management: list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc conversion, file upload, markdown update, and tab management (create, delete, rename)
+- 18 tools for document lifecycle management: list, read, create, update, delete, comment (add, list, reply, resolve, delete), move, folder lookup, markdown-to-doc conversion, file upload, markdown update, and tab management (create, delete, rename)
 - OAuth 2.0 authentication with least-privilege scopes (`drive.file`, `drive.metadata.readonly`, `documents`)
 - Container hardening: read-only filesystem, all capabilities dropped, non-root execution, memory-limited
 - Two-step delete confirmation via server-side cryptographic nonce
@@ -57,7 +57,7 @@ Add to your Claude Code configuration (`~/.claude.json`):
 }
 ```
 
-Restart Claude Code. The `google-docs` MCP server should appear with 14 available tools.
+Restart Claude Code. The `google-docs` MCP server should appear with 18 available tools.
 
 ### Building from source
 
@@ -135,6 +135,10 @@ The `drive.file` scope is deliberately restrictive. The server can only modify d
 | `delete_tab` | Delete a tab from a document | `document_id` (str), `tab_id` (str) |
 | `rename_tab` | Rename a tab in a document | `document_id` (str), `tab_id` (str), `title` (str) |
 | `comment_on_document` | Add a comment, optionally anchored to text | `document_id` (str), `comment` (str), `quoted_text` (str, optional) |
+| `list_comments` | List all comments with replies, authors, and resolved status | `document_id` (str) |
+| `reply_to_comment` | Reply to an existing comment | `document_id` (str), `comment_id` (str), `reply` (str) |
+| `resolve_comment` | Mark a comment as resolved | `document_id` (str), `comment_id` (str) |
+| `delete_comment` | Delete a comment | `document_id` (str), `comment_id` (str) |
 | `find_folder` | Search for a Drive folder by name | `folder_name` (str) |
 | `move_document` | Move a document to a different folder | `document_id` (str), `folder_id` (str) |
 | `delete_document` | Trash a document (two-step nonce confirmation) | `document_id` (str), `nonce` (str, required on second call) |
@@ -260,7 +264,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (296 unit tests)
+# Run tests (317 unit tests)
 uv run pytest -v
 
 # Lint and format

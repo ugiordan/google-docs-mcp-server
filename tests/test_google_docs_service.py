@@ -690,6 +690,79 @@ class TestListComments:
         assert "replies" not in result[0]
 
 
+class TestReplyToComment:
+    """Tests for reply_to_comment method."""
+
+    def test_reply_success(self, service, mock_drive_service):
+        mock_drive_service.replies().create().execute.return_value = {
+            "id": "reply1",
+            "content": "Thanks, fixed!",
+        }
+
+        result = service.reply_to_comment("doc123", "comment1", "Thanks, fixed!")
+
+        assert result["reply_id"] == "reply1"
+        assert result["comment_id"] == "comment1"
+        assert result["document_id"] == "doc123"
+        assert result["content"] == "Thanks, fixed!"
+
+    def test_reply_api_call(self, service, mock_drive_service):
+        mock_drive_service.replies().create().execute.return_value = {
+            "id": "reply1",
+            "content": "OK",
+        }
+
+        service.reply_to_comment("doc123", "c1", "OK")
+
+        call_kwargs = mock_drive_service.replies().create.call_args[1]
+        assert call_kwargs["fileId"] == "doc123"
+        assert call_kwargs["commentId"] == "c1"
+        assert call_kwargs["body"]["content"] == "OK"
+
+
+class TestResolveComment:
+    """Tests for resolve_comment method."""
+
+    def test_resolve_success(self, service, mock_drive_service):
+        mock_drive_service.replies().create().execute.return_value = {"id": "r1"}
+
+        result = service.resolve_comment("doc123", "comment1")
+
+        assert result["comment_id"] == "comment1"
+        assert result["document_id"] == "doc123"
+        assert result["resolved"] is True
+
+    def test_resolve_api_call(self, service, mock_drive_service):
+        mock_drive_service.replies().create().execute.return_value = {"id": "r1"}
+
+        service.resolve_comment("doc123", "c1")
+
+        call_kwargs = mock_drive_service.replies().create.call_args[1]
+        assert call_kwargs["body"]["action"] == "resolve"
+
+
+class TestDeleteComment:
+    """Tests for delete_comment method."""
+
+    def test_delete_success(self, service, mock_drive_service):
+        mock_drive_service.comments().delete().execute.return_value = None
+
+        result = service.delete_comment("doc123", "comment1")
+
+        assert result["comment_id"] == "comment1"
+        assert result["document_id"] == "doc123"
+        assert result["status"] == "deleted"
+
+    def test_delete_api_call(self, service, mock_drive_service):
+        mock_drive_service.comments().delete().execute.return_value = None
+
+        service.delete_comment("doc123", "c1")
+
+        call_kwargs = mock_drive_service.comments().delete.call_args[1]
+        assert call_kwargs["fileId"] == "doc123"
+        assert call_kwargs["commentId"] == "c1"
+
+
 class TestFindFolder:
     """Tests for find_folder method."""
 

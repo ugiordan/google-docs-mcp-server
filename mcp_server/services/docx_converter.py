@@ -82,8 +82,9 @@ def _add_runs(paragraph, runs):
         if run_data.get("italic"):
             run.italic = True
         if run_data.get("code"):
-            run.font.name = "Courier New"
+            run.font.name = "Roboto Mono"
             run.font.size = Pt(9)
+            run.font.color.rgb = RGBColor(0, 112, 0)
         if run_data.get("strikethrough"):
             run.font.strike = True
 
@@ -123,8 +124,9 @@ def _add_code_block(doc, block):
     pPr.append(shd)
 
     run = p.add_run(block["text"])
-    run.font.name = "Courier New"
+    run.font.name = "Roboto Mono"
     run.font.size = Pt(9)
+    run.font.color.rgb = RGBColor(0, 112, 0)
 
 
 def _add_blockquote(doc, block):

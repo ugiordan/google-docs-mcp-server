@@ -3,6 +3,7 @@ import pytest
 from mcp_server.validation import (
     sanitize_query,
     validate_comment,
+    validate_comment_id,
     validate_content_size,
     validate_document_id,
     validate_folder_id,
@@ -83,6 +84,26 @@ class TestValidateComment:
     def test_rejects_too_long(self):
         with pytest.raises(ValueError, match="Comment exceeds 2048 characters"):
             validate_comment("a" * 2049)
+
+
+class TestValidateCommentId:
+    def test_valid_comment_id(self):
+        assert validate_comment_id("comment123") is True
+
+    def test_valid_comment_id_with_hyphens(self):
+        assert validate_comment_id("abc-def-123") is True
+
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError, match="Comment ID cannot be empty"):
+            validate_comment_id("")
+
+    def test_rejects_spaces(self):
+        with pytest.raises(ValueError, match="Invalid comment ID"):
+            validate_comment_id("bad id")
+
+    def test_rejects_special_chars(self):
+        with pytest.raises(ValueError, match="Invalid comment ID"):
+            validate_comment_id("id!@#$")
 
 
 class TestValidateTemplateName:

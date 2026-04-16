@@ -10,14 +10,18 @@ from mcp_server.tools.google_docs_tools import (
     _convert_markdown_to_doc,
     _create_document,
     _create_tab,
+    _delete_comment,
     _delete_document,
     _delete_tab,
     _error_response,
     _find_folder,
+    _list_comments,
     _list_documents,
     _move_document,
     _read_document,
     _rename_tab,
+    _reply_to_comment,
+    _resolve_comment,
     _update_document,
     _update_document_markdown,
     _upload_document,
@@ -431,6 +435,148 @@ class TestCommentOnDocument:
         data = json.loads(result)
 
         assert "error" in data
+        assert data["code"] == "VALIDATION_ERROR"
+
+
+class TestListComments:
+    def test_list_comments_success(self):
+        service = MagicMock()
+        service.list_comments.return_value = [
+            {
+                "id": "c1",
+                "author": "Alice",
+                "content": "Fix this",
+                "resolved": False,
+                "quoted_text": "broken",
+                "replies": [{"author": "Bob", "content": "Done"}],
+            }
+        ]
+
+        result = _list_comments(service, document_id="doc1234567890")
+        data = json.loads(result)
+
+        assert data["comment_count"] == 1
+        assert data["document_id"] == "doc1234567890"
+        assert len(data["comments"]) == 1
+
+    def test_list_comments_empty(self):
+        service = MagicMock()
+        service.list_comments.return_value = []
+
+        result = _list_comments(service, document_id="doc1234567890")
+        data = json.loads(result)
+
+        assert data["comment_count"] == 0
+        assert data["comments"] == []
+
+    def test_list_comments_validation_error(self):
+        service = MagicMock()
+
+        result = _list_comments(service, document_id="bad")
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+
+class TestReplyToComment:
+    def test_reply_success(self):
+        service = MagicMock()
+        service.reply_to_comment.return_value = {
+            "reply_id": "r1",
+            "comment_id": "c1",
+            "document_id": "doc123",
+            "content": "Fixed!",
+        }
+
+        result = _reply_to_comment(
+            service,
+            document_id="doc1234567890",
+            comment_id="comment123",
+            reply="Fixed!",
+        )
+        data = json.loads(result)
+
+        assert data["reply_id"] == "r1"
+        service.reply_to_comment.assert_called_once_with(
+            "doc1234567890", "comment123", "Fixed!"
+        )
+
+    def test_reply_empty_text_error(self):
+        service = MagicMock()
+
+        result = _reply_to_comment(
+            service,
+            document_id="doc1234567890",
+            comment_id="comment123",
+            reply="",
+        )
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+    def test_reply_invalid_comment_id(self):
+        service = MagicMock()
+
+        result = _reply_to_comment(
+            service,
+            document_id="doc1234567890",
+            comment_id="bad id!",
+            reply="test",
+        )
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+
+class TestResolveComment:
+    def test_resolve_success(self):
+        service = MagicMock()
+        service.resolve_comment.return_value = {
+            "comment_id": "c1",
+            "document_id": "doc123",
+            "resolved": True,
+        }
+
+        result = _resolve_comment(
+            service, document_id="doc1234567890", comment_id="comment123"
+        )
+        data = json.loads(result)
+
+        assert data["resolved"] is True
+        service.resolve_comment.assert_called_once_with("doc1234567890", "comment123")
+
+    def test_resolve_invalid_doc_id(self):
+        service = MagicMock()
+
+        result = _resolve_comment(service, document_id="bad", comment_id="comment123")
+        data = json.loads(result)
+
+        assert data["code"] == "VALIDATION_ERROR"
+
+
+class TestDeleteComment:
+    def test_delete_success(self):
+        service = MagicMock()
+        service.delete_comment.return_value = {
+            "comment_id": "c1",
+            "document_id": "doc123",
+            "status": "deleted",
+        }
+
+        result = _delete_comment(
+            service, document_id="doc1234567890", comment_id="comment123"
+        )
+        data = json.loads(result)
+
+        assert data["status"] == "deleted"
+        service.delete_comment.assert_called_once_with("doc1234567890", "comment123")
+
+    def test_delete_invalid_comment_id(self):
+        service = MagicMock()
+
+        result = _delete_comment(service, document_id="doc1234567890", comment_id="")
+        data = json.loads(result)
+
         assert data["code"] == "VALIDATION_ERROR"
 
 

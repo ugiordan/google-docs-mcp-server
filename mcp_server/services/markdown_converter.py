@@ -374,6 +374,14 @@ def extract_template_styles(doc_response: dict) -> dict:
         if "lineSpacing" in paragraph_style:
             style_props["line_spacing"] = paragraph_style["lineSpacing"]
 
+        # Extract paragraph spacing
+        space_above = paragraph_style.get("spaceAbove", {})
+        if "magnitude" in space_above:
+            style_props["space_above"] = space_above["magnitude"]
+        space_below = paragraph_style.get("spaceBelow", {})
+        if "magnitude" in space_below:
+            style_props["space_below"] = space_below["magnitude"]
+
         # Extract foreground color
         fg_color = text_style.get("foregroundColor", {})
         if "color" in fg_color:

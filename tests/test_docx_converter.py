@@ -105,7 +105,7 @@ class TestBlocksToDocx:
         ]
         doc = _load_doc(blocks_to_docx(blocks))
         p = [p for p in doc.paragraphs if "print()" in p.text][0]
-        code_runs = [r for r in p.runs if r.font.name == "Courier New"]
+        code_runs = [r for r in p.runs if r.font.name == "Roboto Mono"]
         assert len(code_runs) >= 1
 
     def test_strikethrough_run(self):
@@ -179,7 +179,7 @@ class TestBlocksToDocx:
         blocks = [{"type": "code_block", "text": "print('hello')"}]
         doc = _load_doc(blocks_to_docx(blocks))
         p = [p for p in doc.paragraphs if "print" in p.text][0]
-        assert p.runs[0].font.name == "Courier New"
+        assert p.runs[0].font.name == "Roboto Mono"
 
     def test_list_item_unordered(self):
         blocks = [
