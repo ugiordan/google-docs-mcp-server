@@ -6,9 +6,8 @@ from mcp_server.auth import SCOPES, load_tokens, revoke_tokens, save_tokens
 
 
 class TestScopes:
-    def test_scopes_are_least_privilege(self):
-        assert "https://www.googleapis.com/auth/drive" not in SCOPES
-        assert "https://www.googleapis.com/auth/drive.file" in SCOPES
+    def test_scopes_include_required_access(self):
+        assert "https://www.googleapis.com/auth/drive" in SCOPES
         assert "https://www.googleapis.com/auth/drive.metadata.readonly" in SCOPES
         assert "https://www.googleapis.com/auth/documents" in SCOPES
         assert len(SCOPES) == 3

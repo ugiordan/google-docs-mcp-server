@@ -5,7 +5,7 @@ A Model Context Protocol (MCP) server that provides Google Docs read and write o
 ## Features
 
 - 18 tools for document lifecycle management: list, read, create, update, delete, comment (add, list, reply, resolve, delete), move, folder lookup, markdown-to-doc conversion, file upload, markdown update, and tab management (create, delete, rename)
-- OAuth 2.0 authentication with least-privilege scopes (`drive.file`, `drive.metadata.readonly`, `documents`)
+- OAuth 2.0 authentication with scopes (`drive`, `drive.metadata.readonly`, `documents`)
 - Container hardening: read-only filesystem, all capabilities dropped, non-root execution, memory-limited
 - Two-step delete confirmation via server-side cryptographic nonce
 - Template-based styling for markdown conversion
@@ -93,7 +93,7 @@ Then replace `ghcr.io/ugiordan/google-docs-mcp-server:latest` with `localhost/go
 2. Select **External** user type (or **Internal** if using Google Workspace) and click **Create**
 3. Fill in the required fields: app name, user support email, developer contact email
 4. On the **Scopes** page, click **Add or Remove Scopes** and add:
-   - `https://www.googleapis.com/auth/drive.file`
+   - `https://www.googleapis.com/auth/drive`
    - `https://www.googleapis.com/auth/drive.metadata.readonly`
    - `https://www.googleapis.com/auth/documents`
 5. On the **Test users** page, add your Google account email
@@ -117,11 +117,11 @@ The server requests three scopes during authentication:
 
 | Scope | Access granted |
 |-------|---------------|
-| `drive.file` | Read/write/delete files that the application has created or that the user has opened with it. Does not grant access to all files in Drive. |
+| `drive` | Full read/write/delete access to Google Drive files. Required for comment, move, and delete operations on any document. |
 | `drive.metadata.readonly` | Read-only access to file metadata (names, IDs, timestamps, folder structure). Cannot read file content through this scope. |
 | `documents` | Read and write access to Google Docs document content and formatting. |
 
-The `drive.file` scope is deliberately restrictive. The server can only modify documents it created or documents explicitly accessed via `read_document`. Pre-existing documents that were never opened through this server will return 403 on write operations.
+The `drive` scope grants access to all files in the user's Drive. Container hardening (read-only filesystem, dropped capabilities, non-root, memory limits) provides defense in depth.
 
 ## Tools
 
@@ -253,7 +253,7 @@ See [SECURITY.md](SECURITY.md) for the full security design, including threat mo
 
 Summary of security measures:
 - **Container**: read-only filesystem, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--memory=256m`, non-root (UID 1001), tmpfs for `/tmp`
-- **Authentication**: least-privilege OAuth scopes, token file permissions `0600`, credentials mounted read-only
+- **Authentication**: token file permissions `0600`, credentials mounted read-only, container hardening compensates for broad `drive` scope
 - **Input validation**: document/folder ID regex validation, query sanitization, content size limits (1MB content, 5MB markdown), title/comment length limits
 - **Prompt injection**: document content wrapped in delimiter tags with untrusted data warning
 - **Delete safety**: server-side cryptographic nonce with 30s TTL, single-use, document-bound
@@ -283,7 +283,6 @@ uv run python main.py --revoke  # revoke tokens
 
 ## Limitations
 
-- **`drive.file` scope boundary**: write operations (update, delete, move, comment) only work on documents created by this server or explicitly opened via `read_document`. Other documents return 403.
 - **Non-atomic replace**: `update_document` in replace mode deletes content then inserts new content via `batchUpdate`. A mid-operation failure may leave partial content.
 - **Limited host filesystem access**: the server runs in a container. File uploads are restricted to the `/uploads/` mount point. Mount your upload directory in the MCP config: `-v $HOME/uploads:/uploads:ro`.
 - **In-memory nonces**: delete nonces are lost on server restart. If the server restarts between the two delete steps, re-initiate the deletion.
@@ -291,7 +290,7 @@ uv run python main.py --revoke  # revoke tokens
 
 ## Troubleshooting
 
-**403 Forbidden on write operations**: expected with `drive.file` scope. Call `read_document` on the target document first to grant access.
+**403 Forbidden on write operations**: re-run `--auth` to refresh tokens. Ensure the Google account has edit access to the target document.
 
 **AUTH_REQUIRED error**: re-run the `--auth` flow to obtain fresh tokens.
 

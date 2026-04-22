@@ -22,21 +22,19 @@ The Google Docs MCP server faces several security challenges:
 
 The server uses three OAuth scopes, chosen based on the principle of least privilege:
 
-### `https://www.googleapis.com/auth/drive.file`
+### `https://www.googleapis.com/auth/drive`
 
-**Purpose**: Access files created by or opened through the app.
+**Purpose**: Full read/write/delete access to Google Drive files.
 
-**Why not `drive`?** The full `drive` scope grants read/write access to all files in the user's Google Drive. The `drive.file` scope restricts write operations to:
-- Documents created by this MCP server
-- Documents explicitly opened via `read_document` (which adds them to the app's scope)
+**Why not `drive.file`?** The narrower `drive.file` scope only grants access to files created by or opened through the app via a Google Picker UI widget. Since MCP servers run headless in containers, there is no picker interaction, so `drive.file` effectively restricts operations to app-created documents only. This prevents commenting, moving, or deleting any pre-existing document, which makes the server impractical for real use.
 
-**Trade-off**: Pre-existing documents that the user has never accessed through this server will return HTTP 403 on write/delete/comment operations. This is intentional. If an attacker uses prompt injection to trick the LLM into deleting files, they can only delete documents that were either created by the server or explicitly opened by the user through the server.
+**Mitigations**: The broader scope is compensated by container hardening (read-only filesystem, dropped capabilities, non-root, memory limits), two-step nonce confirmation for deletes, input validation, and prompt injection mitigation on document reads.
 
 ### `https://www.googleapis.com/auth/drive.metadata.readonly`
 
-**Purpose**: List and search documents without granting full Drive access.
+**Purpose**: List and search documents without additional scope requirements.
 
-**Why needed?** The `drive.file` scope alone would prevent `list_documents` and `find_folder` from seeing documents not yet opened by the app. This read-only metadata scope allows searching across all visible documents while maintaining the write restrictions of `drive.file`.
+**Why needed?** Allows `list_documents` and `find_folder` to search across all visible documents.
 
 ### `https://www.googleapis.com/auth/documents`
 
@@ -150,7 +148,7 @@ References a file already in Google Drive by its ID. Security measures:
 
 - **ID validation**: The file ID is validated against the same regex as document IDs.
 - **Server-side copy**: Uses the Drive API `files().copy()` to create a Google Doc conversion. No file data passes through the MCP server.
-- **Scope-limited**: The `drive.file` scope restriction applies. The server can only copy files it has access to.
+- **Scope-limited**: The server can only copy files the authenticated user has access to.
 
 ## Style Preservation in update_document_markdown
 
@@ -324,7 +322,7 @@ All errors are mapped to safe MCP error responses:
 
 1. **In-memory nonces**: If the server restarts between step 1 and step 2 of a deletion, the nonce is lost. This is a trade-off for simplicity and statelessness.
 
-2. **`drive.file` scope boundary**: The server can only modify documents it created or that were explicitly opened via `read_document`. This is intentional and documented.
+2. **Broad `drive` scope**: The server has full Drive access. Container hardening, delete nonces, and input validation provide defense in depth, but a compromised server could access any file in the user's Drive.
 
 3. **Prompt injection is not solved**: The `<document-content>` tagging reduces risk but does not eliminate it. Prompt injection remains an open research problem.
 
