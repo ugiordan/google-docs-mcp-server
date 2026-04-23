@@ -145,7 +145,7 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `convert_markdown_to_doc` | Convert markdown to a styled document | `markdown_content` (str), `title` (str), `template_name` (str, optional), `folder_id` (str, optional) |
 | `upload_document` | Upload a file as a Google Doc with formatting preserved | `title` (str), `file_path` (str, optional), `file_content_base64` (str, optional), `source_file_id` (str, optional), `mime_type` (str, optional), `folder_id` (str, optional) |
 | `update_document_markdown` | Replace content of an existing Google Doc with styled markdown | `document_id` (str), `markdown_content` (str), `template_name` (str, optional), `tab_id` (str, optional) |
-| `update_text_style` (Docs) | Style text without replacing content | `document_id` (str), `start_index` (int, optional), `end_index` (int, optional), `bold`/`italic`/`underline` (str, optional), `font_family` (str, optional), `font_size` (float, optional), `foreground_color` (str '#RRGGBB', optional), `alignment` (str, optional), `tab_id` (str, optional) |
+| `update_doc_text_style` | Style text without replacing content | `document_id` (str), `start_index` (int, optional), `end_index` (int, optional), `bold`/`italic`/`underline` (str, optional), `font_family` (str, optional), `font_size` (float, optional), `foreground_color` (str '#RRGGBB', optional), `alignment` (str, optional), `tab_id` (str, optional) |
 | **Google Slides** | | |
 | `list_presentations` | List presentations, optionally filtered by name | `query` (str, optional), `max_results` (int, 1-100, default 10) |
 | `read_presentation` | Read all slide content: text, speaker notes, shape IDs, layout info | `presentation_id` (str) |
@@ -157,7 +157,7 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `update_speaker_notes` | Set speaker notes for a slide | `presentation_id` (str), `slide_id` (str), `notes` (str) |
 | `duplicate_slide` | Copy a slide within a presentation | `presentation_id` (str), `slide_id` (str), `position` (int, optional) |
 | `reorder_slides` | Move slides to new positions | `presentation_id` (str), `slide_ids` (str, comma-separated), `position` (int) |
-| `update_text_style` (Slides) | Style all text in a shape without replacing content | `presentation_id` (str), `shape_id` (str), `bold`/`italic`/`underline` (str, optional), `font_family` (str, optional), `font_size` (float, optional), `foreground_color` (str '#RRGGBB', optional), `alignment` (str, optional) |
+| `update_slide_text_style` | Style all text in a shape without replacing content | `presentation_id` (str), `shape_id` (str), `bold`/`italic`/`underline` (str, optional), `font_family` (str, optional), `font_size` (float, optional), `foreground_color` (str '#RRGGBB', optional), `alignment` (str, optional) |
 | `convert_markdown_to_slides` | Convert markdown to a presentation (slides split on `---`) | `markdown_content` (str), `title` (str), `folder_id` (str, optional), `template_name` (str, optional) |
 
 ### Delete confirmation

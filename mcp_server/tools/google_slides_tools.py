@@ -523,7 +523,7 @@ def register_google_slides_tools(
         return _reorder_slides(service, presentation_id, slide_ids, position)
 
     @mcp.tool()
-    def update_text_style(
+    def update_slide_text_style(
         presentation_id: str,
         shape_id: str,
         bold: str = "",

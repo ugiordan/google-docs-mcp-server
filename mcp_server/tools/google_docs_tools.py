@@ -919,7 +919,7 @@ def register_google_docs_tools(
         )
 
     @mcp.tool()
-    def update_text_style(
+    def update_doc_text_style(
         document_id: str,
         start_index: int = -1,
         end_index: int = -1,
