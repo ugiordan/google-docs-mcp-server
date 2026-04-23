@@ -291,7 +291,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (501 unit tests)
+# Run tests (503 unit tests)
 uv run pytest -v
 
 # Lint and format

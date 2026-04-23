@@ -296,6 +296,63 @@ class TestAddSlide:
         ]
         assert layout_ref == {"layoutId": "layout_abc"}
 
+    def test_semantic_match_blank_layout(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "layouts": [
+                {
+                    "objectId": "custom_title_body",
+                    "layoutProperties": {"displayName": "Content"},
+                    "pageElements": [
+                        {"shape": {"placeholder": {"type": "TITLE"}}},
+                        {"shape": {"placeholder": {"type": "BODY"}}},
+                    ],
+                },
+                {
+                    "objectId": "custom_blank",
+                    "layoutProperties": {"displayName": "Empty canvas"},
+                    "pageElements": [
+                        {"shape": {"placeholder": {"type": "SLIDE_NUMBER"}}},
+                    ],
+                },
+            ]
+        }
+        mock_slides.presentations().batchUpdate().execute.return_value = {
+            "replies": [{"createSlide": {"objectId": "s1"}}]
+        }
+        result = svc.add_slide("pres123", layout="BLANK")
+        assert result["slide_id"] == "s1"
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        layout_ref = call_args[1]["body"]["requests"][0]["createSlide"][
+            "slideLayoutReference"
+        ]
+        assert layout_ref == {"layoutId": "custom_blank"}
+
+    def test_semantic_match_title_only(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "layouts": [
+                {
+                    "objectId": "layout_title",
+                    "layoutProperties": {"displayName": "Heading"},
+                    "pageElements": [
+                        {"shape": {"placeholder": {"type": "TITLE"}}},
+                        {"shape": {"placeholder": {"type": "FOOTER"}}},
+                    ],
+                },
+            ]
+        }
+        mock_slides.presentations().batchUpdate().execute.return_value = {
+            "replies": [{"createSlide": {"objectId": "s1"}}]
+        }
+        result = svc.add_slide("pres123", layout="TITLE_ONLY")
+        assert result["slide_id"] == "s1"
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        layout_ref = call_args[1]["body"]["requests"][0]["createSlide"][
+            "slideLayoutReference"
+        ]
+        assert layout_ref == {"layoutId": "layout_title"}
+
     def test_falls_back_to_predefined_layout(self):
         svc, mock_slides, _ = _make_service()
         mock_slides.presentations().get().execute.return_value = {"layouts": []}

@@ -156,25 +156,58 @@ class GoogleSlidesService:
 
         return retry_on_429(_create)
 
-    _LAYOUT_FIELDS = "layouts.objectId," "layouts.layoutProperties.displayName"
+    _LAYOUT_FIELDS = (
+        "layouts.objectId,"
+        "layouts.layoutProperties.displayName,"
+        "layouts.pageElements.shape.placeholder.type"
+    )
+
+    _PREDEFINED_PLACEHOLDERS = {
+        "BLANK": frozenset(),
+        "TITLE_ONLY": frozenset({"TITLE"}),
+        "TITLE_AND_BODY": frozenset({"TITLE", "BODY"}),
+        "TITLE_AND_TWO_COLUMNS": frozenset({"TITLE", "BODY"}),
+        "SECTION_HEADER": frozenset({"TITLE", "SUBTITLE"}),
+        "CAPTION_ONLY": frozenset({"BODY"}),
+        "TITLE": frozenset({"CENTERED_TITLE", "SUBTITLE"}),
+        "ONE_COLUMN_TEXT": frozenset({"TITLE", "BODY"}),
+        "MAIN_POINT": frozenset({"TITLE"}),
+        "BIG_NUMBER": frozenset({"TITLE"}),
+    }
+
+    _SKIP_PLACEHOLDERS = frozenset({"SLIDE_NUMBER", "DATE_AND_TIME", "FOOTER"})
 
     def _resolve_layout_reference(self, presentation_id, layout):
         """Resolve a layout name to a slideLayoutReference dict.
 
         Tries custom layout display names first (case-insensitive), then
-        falls back to predefinedLayout for standard Slides API names.
+        semantic matching by placeholder types for predefined layout names,
+        then falls back to predefinedLayout for standard themes.
         """
-        _fields = self._LAYOUT_FIELDS
         presentation = retry_on_429(
             lambda: self.slides_service.presentations()
-            .get(presentationId=presentation_id, fields=_fields)
+            .get(presentationId=presentation_id, fields=self._LAYOUT_FIELDS)
             .execute()
         )
+        layouts = presentation.get("layouts", [])
+
         layout_lower = layout.lower()
-        for entry in presentation.get("layouts", []):
+        for entry in layouts:
             display_name = entry.get("layoutProperties", {}).get("displayName", "")
             if display_name.lower() == layout_lower:
                 return {"layoutId": entry["objectId"]}
+
+        target = self._PREDEFINED_PLACEHOLDERS.get(layout)
+        if target is not None and layouts:
+            for entry in layouts:
+                placeholders = set()
+                for el in entry.get("pageElements", []):
+                    pt = el.get("shape", {}).get("placeholder", {}).get("type")
+                    if pt and pt not in self._SKIP_PLACEHOLDERS:
+                        placeholders.add(pt)
+                if placeholders == target:
+                    return {"layoutId": entry["objectId"]}
+
         return {"predefinedLayout": layout}
 
     def add_slide(self, presentation_id, position=None, layout=None):
