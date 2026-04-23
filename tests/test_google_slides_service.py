@@ -484,7 +484,34 @@ class TestUpdateSlideText:
 
         call_args = mock_slides.presentations().batchUpdate.call_args
         requests = call_args[1]["body"]["requests"]
-        assert len(requests) == 2
+        assert len(requests) == 1
+        assert "insertText" in requests[0]
+
+    def test_empty_placeholder_skips_delete(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "slides": [
+                {
+                    "objectId": "s1",
+                    "pageElements": [
+                        {
+                            "objectId": "sh1",
+                            "shape": {
+                                "text": {"textElements": [{"paragraphMarker": {}}]}
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.update_slide_text("pres123", "s1", "sh1", "New content")
+
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        requests = call_args[1]["body"]["requests"]
+        assert len(requests) == 1
+        assert "insertText" in requests[0]
+        assert requests[0]["insertText"]["text"] == "New content"
 
 
 class TestDeleteShape:
@@ -810,11 +837,12 @@ class TestReadShapeStyle:
                 }
             ]
         }
-        style = svc._read_shape_style("pres1", "s1", "sh1")
+        style, has_text = svc._read_shape_style("pres1", "s1", "sh1")
         assert style["fontFamily"] == "Roboto"
         assert style["fontSize"] == {"magnitude": 14, "unit": "PT"}
         assert style["bold"] is False
         assert "link" not in style
+        assert has_text is True
 
     def test_returns_empty_for_missing_shape(self):
         svc, mock_slides, _ = _make_service()
@@ -826,7 +854,7 @@ class TestReadShapeStyle:
                 }
             ]
         }
-        assert svc._read_shape_style("pres1", "s1", "missing") == {}
+        assert svc._read_shape_style("pres1", "s1", "missing") == ({}, False)
 
     def test_returns_empty_for_no_text_runs(self):
         svc, mock_slides, _ = _make_service()
@@ -845,12 +873,12 @@ class TestReadShapeStyle:
                 }
             ]
         }
-        assert svc._read_shape_style("pres1", "s1", "sh1") == {}
+        assert svc._read_shape_style("pres1", "s1", "sh1") == ({}, False)
 
     def test_returns_empty_for_missing_slide(self):
         svc, mock_slides, _ = _make_service()
         mock_slides.presentations().get().execute.return_value = {"slides": []}
-        assert svc._read_shape_style("pres1", "missing", "sh1") == {}
+        assert svc._read_shape_style("pres1", "missing", "sh1") == ({}, False)
 
 
 class TestExtractText:

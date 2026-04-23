@@ -253,23 +253,29 @@ class GoogleSlidesService:
 
     def update_slide_text(self, presentation_id, slide_id, shape_id, content):
         def _update():
-            saved_style = self._read_shape_style(presentation_id, slide_id, shape_id)
+            saved_style, has_text = self._read_shape_style(
+                presentation_id, slide_id, shape_id
+            )
 
-            requests = [
-                {
-                    "deleteText": {
-                        "objectId": shape_id,
-                        "textRange": {"type": "ALL"},
+            requests = []
+            if has_text:
+                requests.append(
+                    {
+                        "deleteText": {
+                            "objectId": shape_id,
+                            "textRange": {"type": "ALL"},
+                        }
                     }
-                },
+                )
+            requests.append(
                 {
                     "insertText": {
                         "objectId": shape_id,
                         "insertionIndex": 0,
                         "text": content,
                     }
-                },
-            ]
+                }
+            )
 
             if saved_style:
                 fields = ",".join(saved_style.keys())
@@ -630,6 +636,7 @@ class GoogleSlidesService:
     ]
 
     def _read_shape_style(self, presentation_id, slide_id, shape_id):
+        """Returns (style_dict, has_text) for the given shape."""
         _fields = "slides.objectId,slides.pageElements.objectId,slides.pageElements.shape.text"
         presentation = (
             self.slides_service.presentations()
@@ -645,15 +652,23 @@ class GoogleSlidesService:
                 text_elements = (
                     element.get("shape", {}).get("text", {}).get("textElements", [])
                 )
+                has_text = any(
+                    te.get("textRun", {}).get("content", "").strip()
+                    for te in text_elements
+                )
                 for te in text_elements:
                     style = te.get("textRun", {}).get("style", {})
                     if style:
-                        return {
-                            k: v
-                            for k, v in style.items()
-                            if k in self._STYLE_FIELDS and v is not None
-                        }
-        return {}
+                        return (
+                            {
+                                k: v
+                                for k, v in style.items()
+                                if k in self._STYLE_FIELDS and v is not None
+                            },
+                            has_text,
+                        )
+                return {}, has_text
+        return {}, False
 
     @staticmethod
     def _extract_text(text_obj):
