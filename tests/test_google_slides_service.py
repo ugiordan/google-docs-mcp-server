@@ -206,6 +206,40 @@ class TestCreatePresentation:
         svc.create_presentation("New Pres", folder_id="folder1")
         mock_drive.files().create.assert_called()
 
+    def test_creates_from_template(self):
+        svc, _, mock_drive = _make_service()
+        mock_drive.files().copy().execute.return_value = {
+            "id": "copy123",
+            "name": "From Template",
+        }
+        result = svc.create_presentation(
+            "From Template", template_presentation_id="tmpl123"
+        )
+        assert result["id"] == "copy123"
+        mock_drive.files().copy.assert_called()
+
+    def test_template_with_folder(self):
+        svc, _, mock_drive = _make_service()
+        mock_drive.files().copy().execute.return_value = {
+            "id": "copy123",
+            "name": "From Template",
+        }
+        result = svc.create_presentation(
+            "From Template",
+            folder_id="folder1",
+            template_presentation_id="tmpl123",
+        )
+        assert result["id"] == "copy123"
+
+    def test_no_template_uses_create(self):
+        svc, _, mock_drive = _make_service()
+        mock_drive.files().create().execute.return_value = {
+            "id": "new123",
+            "name": "Blank",
+        }
+        svc.create_presentation("Blank")
+        mock_drive.files().create.assert_called()
+
 
 class TestAddSlide:
     def test_adds_slide(self):

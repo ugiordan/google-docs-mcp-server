@@ -112,18 +112,33 @@ class GoogleSlidesService:
 
         return retry_on_429(_read)
 
-    def create_presentation(self, title, folder_id=None):
+    def create_presentation(self, title, folder_id=None, template_presentation_id=None):
         def _create():
-            body = {
-                "name": title,
-                "mimeType": "application/vnd.google-apps.presentation",
-            }
-            if folder_id:
-                body["parents"] = [folder_id]
-
-            file_metadata = (
-                self.drive_service.files().create(body=body, fields="id,name").execute()
-            )
+            if template_presentation_id:
+                copy_body = {"name": title}
+                if folder_id:
+                    copy_body["parents"] = [folder_id]
+                file_metadata = (
+                    self.drive_service.files()
+                    .copy(
+                        fileId=template_presentation_id,
+                        body=copy_body,
+                        fields="id,name",
+                    )
+                    .execute()
+                )
+            else:
+                body = {
+                    "name": title,
+                    "mimeType": "application/vnd.google-apps.presentation",
+                }
+                if folder_id:
+                    body["parents"] = [folder_id]
+                file_metadata = (
+                    self.drive_service.files()
+                    .create(body=body, fields="id,name")
+                    .execute()
+                )
 
             return {
                 "id": file_metadata["id"],
@@ -344,8 +359,12 @@ class GoogleSlidesService:
 
         return retry_on_429(_reorder)
 
-    def convert_markdown_to_slides(self, title, slide_dicts, folder_id=None):
-        result = self.create_presentation(title, folder_id)
+    def convert_markdown_to_slides(
+        self, title, slide_dicts, folder_id=None, template_presentation_id=None
+    ):
+        result = self.create_presentation(
+            title, folder_id, template_presentation_id=template_presentation_id
+        )
         presentation_id = result["id"]
 
         try:

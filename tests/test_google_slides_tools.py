@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 from googleapiclient.errors import HttpError
 
+from mcp_server.config import SlidesTemplate, SlidesTemplateConfig
 from mcp_server.nonce import NonceManager
 from mcp_server.tools.common import error_response, handle_api_error, tag_untrusted
 from mcp_server.tools.google_slides_tools import (
@@ -28,6 +29,26 @@ def _mock_service():
 
 def _nonce_manager():
     return NonceManager(ttl_seconds=30)
+
+
+def _empty_slides_config():
+    return SlidesTemplateConfig(templates=[])
+
+
+def _slides_config_with_default():
+    return SlidesTemplateConfig(
+        templates=[
+            SlidesTemplate(
+                name="corporate",
+                presentation_id="tmpl_pres_id_1234567890",
+                default=True,
+            ),
+            SlidesTemplate(
+                name="minimal",
+                presentation_id="tmpl_pres_id_0987654321",
+            ),
+        ]
+    )
 
 
 class TestListPresentations:
@@ -130,14 +151,66 @@ class TestCreatePresentation:
             "name": "My Pres",
             "url": "https://...",
         }
-        result = json.loads(_create_presentation(svc, "My Pres"))
+        result = json.loads(
+            _create_presentation(svc, _empty_slides_config(), "My Pres")
+        )
         assert result["id"] == "new1"
         assert "untrusted-data" in result["name"]
 
     def test_empty_title(self):
         svc = _mock_service()
-        result = json.loads(_create_presentation(svc, ""))
+        result = json.loads(_create_presentation(svc, _empty_slides_config(), ""))
         assert result["code"] == "VALIDATION_ERROR"
+
+    def test_uses_default_template(self):
+        svc = _mock_service()
+        svc.create_presentation.return_value = {
+            "id": "new1",
+            "name": "My Pres",
+            "url": "https://...",
+        }
+        cfg = _slides_config_with_default()
+        _create_presentation(svc, cfg, "My Pres")
+        svc.create_presentation.assert_called_with(
+            "My Pres",
+            folder_id=None,
+            template_presentation_id="tmpl_pres_id_1234567890",
+        )
+
+    def test_uses_named_template(self):
+        svc = _mock_service()
+        svc.create_presentation.return_value = {
+            "id": "new1",
+            "name": "My Pres",
+            "url": "https://...",
+        }
+        cfg = _slides_config_with_default()
+        _create_presentation(svc, cfg, "My Pres", template_name="minimal")
+        svc.create_presentation.assert_called_with(
+            "My Pres",
+            folder_id=None,
+            template_presentation_id="tmpl_pres_id_0987654321",
+        )
+
+    def test_unknown_template_rejected(self):
+        svc = _mock_service()
+        cfg = _slides_config_with_default()
+        result = json.loads(
+            _create_presentation(svc, cfg, "My Pres", template_name="unknown")
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_no_template_no_config(self):
+        svc = _mock_service()
+        svc.create_presentation.return_value = {
+            "id": "new1",
+            "name": "My Pres",
+            "url": "https://...",
+        }
+        _create_presentation(svc, _empty_slides_config(), "My Pres")
+        svc.create_presentation.assert_called_with(
+            "My Pres", folder_id=None, template_presentation_id=None
+        )
 
 
 class TestAddSlide:
@@ -381,19 +454,53 @@ class TestConvertMarkdownToSlides:
             "slide_count": 2,
         }
         md = "# Slide 1\nContent\n---\n# Slide 2\nMore"
-        result = json.loads(_convert_markdown_to_slides(svc, md, "My Pres"))
+        result = json.loads(
+            _convert_markdown_to_slides(svc, _empty_slides_config(), md, "My Pres")
+        )
         assert result["id"] == "pres1"
         assert result["slide_count"] == 2
 
     def test_empty_markdown(self):
         svc = _mock_service()
-        result = json.loads(_convert_markdown_to_slides(svc, "", "Title"))
+        result = json.loads(
+            _convert_markdown_to_slides(svc, _empty_slides_config(), "", "Title")
+        )
         assert result["code"] == "VALIDATION_ERROR"
 
     def test_empty_title(self):
         svc = _mock_service()
-        result = json.loads(_convert_markdown_to_slides(svc, "# Content", ""))
+        result = json.loads(
+            _convert_markdown_to_slides(svc, _empty_slides_config(), "# Content", "")
+        )
         assert result["code"] == "VALIDATION_ERROR"
+
+    def test_uses_default_template(self):
+        svc = _mock_service()
+        svc.convert_markdown_to_slides.return_value = {
+            "id": "pres1",
+            "name": "My Pres",
+            "url": "https://...",
+            "slide_count": 1,
+        }
+        cfg = _slides_config_with_default()
+        _convert_markdown_to_slides(svc, cfg, "# Slide\nContent", "My Pres")
+        call_kwargs = svc.convert_markdown_to_slides.call_args
+        assert call_kwargs[1]["template_presentation_id"] == "tmpl_pres_id_1234567890"
+
+    def test_uses_named_template(self):
+        svc = _mock_service()
+        svc.convert_markdown_to_slides.return_value = {
+            "id": "pres1",
+            "name": "My Pres",
+            "url": "https://...",
+            "slide_count": 1,
+        }
+        cfg = _slides_config_with_default()
+        _convert_markdown_to_slides(
+            svc, cfg, "# Slide\nContent", "My Pres", template_name="minimal"
+        )
+        call_kwargs = svc.convert_markdown_to_slides.call_args
+        assert call_kwargs[1]["template_presentation_id"] == "tmpl_pres_id_0987654321"
 
 
 class TestTagUntrusted:
@@ -469,7 +576,9 @@ class TestToolsApiErrorPaths:
     def test_create_presentation_api_error(self):
         svc = _mock_service()
         svc.create_presentation.side_effect = self._http_error()
-        result = json.loads(_create_presentation(svc, "Test Pres"))
+        result = json.loads(
+            _create_presentation(svc, _empty_slides_config(), "Test Pres")
+        )
         assert result["code"] == "API_ERROR"
 
     def test_add_slide_api_error(self):
@@ -521,6 +630,8 @@ class TestToolsApiErrorPaths:
         svc = _mock_service()
         svc.convert_markdown_to_slides.side_effect = self._http_error()
         result = json.loads(
-            _convert_markdown_to_slides(svc, "# Slide\nContent", "Title")
+            _convert_markdown_to_slides(
+                svc, _empty_slides_config(), "# Slide\nContent", "Title"
+            )
         )
         assert result["code"] == "API_ERROR"

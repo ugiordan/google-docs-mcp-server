@@ -3,6 +3,7 @@
 import json
 import logging
 
+from mcp_server.config import SlidesTemplateConfig
 from mcp_server.nonce import NonceManager
 from mcp_server.services.google_slides_service import GoogleSlidesService
 from mcp_server.services.slides_markdown_converter import markdown_to_slide_dicts
@@ -15,6 +16,7 @@ from mcp_server.validation import (
     validate_presentation_id,
     validate_shape_id,
     validate_slide_id,
+    validate_template_name,
     validate_title,
 )
 
@@ -96,16 +98,35 @@ def _read_presentation(service: GoogleSlidesService, presentation_id: str) -> st
         return _handle_api_error(e, "read_presentation")
 
 
+def _resolve_slides_template(
+    template_config: SlidesTemplateConfig, template_name: str
+) -> str | None:
+    if template_name:
+        available = [t.name for t in template_config.templates]
+        validate_template_name(template_name, available)
+        for t in template_config.templates:
+            if t.name == template_name:
+                return t.presentation_id
+    elif template_config.default_template:
+        return template_config.default_template.presentation_id
+    return None
+
+
 def _create_presentation(
     service: GoogleSlidesService,
+    template_config: SlidesTemplateConfig,
     title: str,
     folder_id: str = "",
+    template_name: str = "",
 ) -> str:
     try:
         validate_title(title)
         if folder_id:
             validate_folder_id(folder_id)
-        result = service.create_presentation(title, folder_id=folder_id or None)
+        template_id = _resolve_slides_template(template_config, template_name)
+        result = service.create_presentation(
+            title, folder_id=folder_id or None, template_presentation_id=template_id
+        )
         result["name"] = _tag_untrusted(result["name"])
         logger.info("create_presentation: %s", result["id"])
         return json.dumps(result)
@@ -320,9 +341,11 @@ def _reorder_slides(
 
 def _convert_markdown_to_slides(
     service: GoogleSlidesService,
+    template_config: SlidesTemplateConfig,
     markdown_content: str,
     title: str,
     folder_id: str = "",
+    template_name: str = "",
 ) -> str:
     try:
         validate_title(title)
@@ -336,8 +359,12 @@ def _convert_markdown_to_slides(
                 "No slides found in markdown content", "VALIDATION_ERROR"
             )
 
+        template_id = _resolve_slides_template(template_config, template_name)
         result = service.convert_markdown_to_slides(
-            title, slide_dicts, folder_id=folder_id or None
+            title,
+            slide_dicts,
+            folder_id=folder_id or None,
+            template_presentation_id=template_id,
         )
         result["name"] = _tag_untrusted(result["name"])
         logger.info(
@@ -353,7 +380,10 @@ def _convert_markdown_to_slides(
 
 
 def register_google_slides_tools(
-    mcp, service: GoogleSlidesService, nonce_manager: NonceManager
+    mcp,
+    service: GoogleSlidesService,
+    nonce_manager: NonceManager,
+    slides_template_config: SlidesTemplateConfig,
 ):
     @mcp.tool()
     def list_presentations(query: str = "", max_results: int = 10) -> str:
@@ -366,9 +396,13 @@ def register_google_slides_tools(
         return _read_presentation(service, presentation_id)
 
     @mcp.tool()
-    def create_presentation(title: str, folder_id: str = "") -> str:
-        """Create a new Google Slides presentation with optional folder placement."""
-        return _create_presentation(service, title, folder_id)
+    def create_presentation(
+        title: str, folder_id: str = "", template_name: str = ""
+    ) -> str:
+        """Create a new Google Slides presentation. Uses the default slides template if configured, or specify template_name to pick one. The template's theme, masters, and layouts are inherited."""
+        return _create_presentation(
+            service, slides_template_config, title, folder_id, template_name
+        )
 
     @mcp.tool()
     def add_slide(presentation_id: str, position: int = -1, layout: str = "") -> str:
@@ -409,7 +443,17 @@ def register_google_slides_tools(
 
     @mcp.tool()
     def convert_markdown_to_slides(
-        markdown_content: str, title: str, folder_id: str = ""
+        markdown_content: str,
+        title: str,
+        folder_id: str = "",
+        template_name: str = "",
     ) -> str:
-        """Convert markdown to a Google Slides presentation. Slides are separated by --- (horizontal rules). First # heading becomes slide title. Speaker notes use :::notes blocks."""
-        return _convert_markdown_to_slides(service, markdown_content, title, folder_id)
+        """Convert markdown to a Google Slides presentation. Slides are separated by --- (horizontal rules). First # heading becomes slide title. Speaker notes use :::notes blocks. Uses the default slides template if configured."""
+        return _convert_markdown_to_slides(
+            service,
+            slides_template_config,
+            markdown_content,
+            title,
+            folder_id,
+            template_name,
+        )

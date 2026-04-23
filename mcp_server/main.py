@@ -8,7 +8,7 @@ import sys
 from fastmcp import FastMCP
 
 from mcp_server.auth import load_tokens
-from mcp_server.config import load_templates
+from mcp_server.config import load_slides_templates, load_templates
 from mcp_server.nonce import NonceManager
 from mcp_server.services.google_docs_service import GoogleDocsService
 from mcp_server.services.google_slides_service import GoogleSlidesService
@@ -47,6 +47,7 @@ def create_server() -> FastMCP:
 
     # Load templates (graceful degradation if missing)
     template_config = load_templates(templates_path)
+    slides_template_config = load_slides_templates(templates_path)
 
     # Load auth tokens
     creds = load_tokens(token_path)
@@ -74,7 +75,9 @@ def create_server() -> FastMCP:
     if service:
         slides_service = GoogleSlidesService(creds)
         register_google_docs_tools(mcp, service, nonce_manager, template_config)
-        register_google_slides_tools(mcp, slides_service, nonce_manager)
+        register_google_slides_tools(
+            mcp, slides_service, nonce_manager, slides_template_config
+        )
     else:
         # Register a single tool that tells the user to authenticate
         @mcp.tool()

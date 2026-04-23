@@ -148,7 +148,7 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | **Google Slides** | | |
 | `list_presentations` | List presentations, optionally filtered by name | `query` (str, optional), `max_results` (int, 1-100, default 10) |
 | `read_presentation` | Read all slide content: text, speaker notes, shape IDs, layout info | `presentation_id` (str) |
-| `create_presentation` | Create a new presentation | `title` (str), `folder_id` (str, optional) |
+| `create_presentation` | Create a new presentation, optionally from a template | `title` (str), `folder_id` (str, optional), `template_name` (str, optional) |
 | `add_slide` | Add a slide at a position with optional layout | `presentation_id` (str), `position` (int, optional), `layout` (str, optional) |
 | `delete_slide` | Delete a slide (two-step nonce confirmation) | `presentation_id` (str), `slide_id` (str), `nonce` (str, required on second call) |
 | `update_slide_text` | Replace text in a shape, preserving font/size/color | `presentation_id` (str), `slide_id` (str), `shape_id` (str), `content` (str) |
@@ -156,7 +156,7 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `update_speaker_notes` | Set speaker notes for a slide | `presentation_id` (str), `slide_id` (str), `notes` (str) |
 | `duplicate_slide` | Copy a slide within a presentation | `presentation_id` (str), `slide_id` (str), `position` (int, optional) |
 | `reorder_slides` | Move slides to new positions | `presentation_id` (str), `slide_ids` (str, comma-separated), `position` (int) |
-| `convert_markdown_to_slides` | Convert markdown to a presentation (slides split on `---`) | `markdown_content` (str), `title` (str), `folder_id` (str, optional) |
+| `convert_markdown_to_slides` | Convert markdown to a presentation (slides split on `---`) | `markdown_content` (str), `title` (str), `folder_id` (str, optional), `template_name` (str, optional) |
 
 ### Delete confirmation
 
@@ -192,7 +192,7 @@ Provide exactly one of these. The MCP config mounts `~/uploads` read-only into t
 
 ## Templates
 
-Templates let you apply consistent styling when converting markdown to Google Docs. Create `~/.config/google-docs-mcp/templates.yaml`:
+Templates let you apply consistent styling when converting markdown to Google Docs and Slides. Create `~/.config/google-docs-mcp/templates.yaml`:
 
 ```yaml
 templates:
@@ -201,13 +201,28 @@ templates:
     default: true
   - name: "report"
     doc_id: "2xYzAbCdEfGhIjKlMnOpQrStUvWx0123456789DEF"
+
+slides_templates:
+  - name: "corporate"
+    presentation_id: "1aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ABC"
+    default: true
 ```
+
+### Docs templates
 
 The `doc_id` is the ID of a Google Doc whose named styles (heading fonts, body font, sizes, colors, line spacing) will be extracted and applied. Find it in the document URL: `docs.google.com/document/d/{doc_id}/edit`.
 
 Styles copied: heading fonts (H1-H6), body text font, font sizes, line spacing, text colors. Not copied: complex layouts, columns, page breaks, headers/footers, Apps Script, macros.
 
-If `templates.yaml` is missing or empty, all tools work normally and `convert_markdown_to_doc` uses default styling.
+### Slides templates
+
+The `presentation_id` is the ID of a Google Slides presentation that serves as the base for new presentations. Find it in the presentation URL: `docs.google.com/presentation/d/{presentation_id}/edit`.
+
+When a slides template is configured, `create_presentation` and `convert_markdown_to_slides` will copy the template presentation (via Drive API `files.copy`) instead of creating a blank one. The copy inherits the template's theme, master slides, layouts, fonts, and colors. The template itself is never modified.
+
+If a default template is set, it's used automatically. Pass `template_name` to pick a specific template. Without any slides template configuration, presentations are created blank.
+
+If `templates.yaml` is missing or empty, all tools work normally with default styling.
 
 ## Uploading Files
 
@@ -276,7 +291,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (485 unit tests)
+# Run tests (502 unit tests)
 uv run pytest -v
 
 # Lint and format
