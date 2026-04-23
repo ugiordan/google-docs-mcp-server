@@ -1,7 +1,7 @@
 """Tests for Google Slides MCP tools."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from googleapiclient.errors import HttpError
 

@@ -1,7 +1,6 @@
 """Google Docs service layer for API interactions."""
 
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaInMemoryUpload
 
 from mcp_server.utils.retry import retry_on_429

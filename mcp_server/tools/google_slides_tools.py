@@ -10,7 +10,6 @@ from mcp_server.services.google_slides_service import GoogleSlidesService
 from mcp_server.services.slides_markdown_converter import markdown_to_slide_dicts
 from mcp_server.validation import (
     MAX_MARKDOWN_BYTES,
-    validate_comment,
     validate_content_size,
     validate_folder_id,
     validate_presentation_id,
