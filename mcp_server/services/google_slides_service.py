@@ -43,11 +43,19 @@ class GoogleSlidesService:
 
         return retry_on_429(_list)
 
+    _READ_FIELDS = (
+        "presentationId,title,"
+        "layouts.objectId,layouts.layoutProperties.displayName,"
+        "slides.objectId,"
+        "slides.slideProperties,"
+        "slides.pageElements"
+    )
+
     def read_presentation(self, presentation_id):
         def _read():
             response = (
                 self.slides_service.presentations()
-                .get(presentationId=presentation_id)
+                .get(presentationId=presentation_id, fields=self._READ_FIELDS)
                 .execute()
             )
 
