@@ -251,6 +251,21 @@ class GoogleSlidesService:
 
         return retry_on_429(_delete)
 
+    def delete_slides(self, presentation_id, slide_ids):
+        def _delete():
+            requests = [{"deleteObject": {"objectId": sid}} for sid in slide_ids]
+            self.slides_service.presentations().batchUpdate(
+                presentationId=presentation_id, body={"requests": requests}
+            ).execute()
+            return {
+                "presentation_id": presentation_id,
+                "slide_ids": list(slide_ids),
+                "deleted_count": len(slide_ids),
+                "status": "deleted",
+            }
+
+        return retry_on_429(_delete)
+
     def update_slide_text(self, presentation_id, slide_id, shape_id, content):
         def _update():
             saved_style, has_text = self._read_shape_style(

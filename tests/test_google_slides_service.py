@@ -1007,6 +1007,33 @@ class TestReorderSlides:
         assert result["new_position"] == 0
 
 
+class TestDeleteSlides:
+    def test_deletes_multiple_slides(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.delete_slides("pres123", ["s1", "s2", "s3"])
+        assert result["status"] == "deleted"
+        assert result["deleted_count"] == 3
+        assert result["slide_ids"] == ["s1", "s2", "s3"]
+
+    def test_sends_batch_delete_requests(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.delete_slides("pres123", ["s1", "s2"])
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        body = call_args[1]["body"]
+        reqs = body["requests"]
+        assert len(reqs) == 2
+        assert reqs[0] == {"deleteObject": {"objectId": "s1"}}
+        assert reqs[1] == {"deleteObject": {"objectId": "s2"}}
+
+    def test_single_slide(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.delete_slides("pres123", ["s1"])
+        assert result["deleted_count"] == 1
+
+
 class TestUpdateTextStyle:
     def test_bold_sends_update_text_style_request(self):
         svc, mock_slides, _ = _make_service()

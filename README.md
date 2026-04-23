@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that provides Google Docs and Google Slide
 
 ## Features
 
-- 31 tools for document and presentation lifecycle management: Docs (list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc, file upload, markdown update, tab management, text styling) and Slides (list, read, create, add/delete/duplicate/reorder slides, update text, text styling, delete shape, speaker notes, markdown-to-slides)
+- 32 tools for document and presentation lifecycle management: Docs (list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc, file upload, markdown update, tab management, text styling) and Slides (list, read, create, add/delete/bulk delete/duplicate/reorder slides, update text, text styling, delete shape, speaker notes, markdown-to-slides)
 - OAuth 2.0 authentication with scopes (`drive`, `drive.metadata.readonly`, `documents`)
 - Container hardening: read-only filesystem, all capabilities dropped, non-root execution, memory-limited
 - Two-step delete confirmation via server-side cryptographic nonce
@@ -57,7 +57,7 @@ Add to your Claude Code configuration (`~/.claude.json`):
 }
 ```
 
-Restart Claude Code. The `google-docs` MCP server should appear with 31 available tools.
+Restart Claude Code. The `google-docs` MCP server should appear with 32 available tools.
 
 ### Building from source
 
@@ -152,6 +152,7 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `create_presentation` | Create a new presentation, optionally from a template | `title` (str), `folder_id` (str, optional), `template_name` (str, optional) |
 | `add_slide` | Add a slide at a position with optional layout | `presentation_id` (str), `position` (int, optional), `layout` (str, optional: custom display name or predefined) |
 | `delete_slide` | Delete a slide (two-step nonce confirmation) | `presentation_id` (str), `slide_id` (str), `nonce` (str, required on second call) |
+| `delete_slides` | Delete multiple slides at once (two-step nonce confirmation) | `presentation_id` (str), `slide_ids` (str, comma-separated), `nonce` (str, required on second call) |
 | `update_slide_text` | Replace text in a shape, preserving font/size/color | `presentation_id` (str), `slide_id` (str), `shape_id` (str), `content` (str) |
 | `delete_shape` | Delete a shape, image, or element from a slide (two-step nonce confirmation) | `presentation_id` (str), `shape_id` (str), `nonce` (str, required on second call) |
 | `update_speaker_notes` | Set speaker notes for a slide | `presentation_id` (str), `slide_id` (str), `notes` (str) |
@@ -162,7 +163,7 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 
 ### Delete confirmation
 
-`delete_document`, `delete_slide`, and `delete_shape` require two calls. The first call returns a cryptographic nonce (valid for 30 seconds). The second call must include the nonce to confirm. Nonces are single-use, resource-specific, and stored in-memory. Documents are moved to trash, not permanently deleted. Slides and shapes are deleted immediately on confirmation.
+`delete_document`, `delete_slide`, `delete_slides`, and `delete_shape` require two calls. The first call returns a cryptographic nonce (valid for 30 seconds). The second call must include the nonce to confirm. Nonces are single-use, resource-specific, and stored in-memory. Documents are moved to trash, not permanently deleted. Slides and shapes are deleted immediately on confirmation.
 
 ### Tabs
 
@@ -293,7 +294,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (556 unit tests)
+# Run tests (570 unit tests)
 uv run pytest -v
 
 # Lint and format

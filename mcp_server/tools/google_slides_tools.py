@@ -206,6 +206,62 @@ def _delete_slide(
         return _handle_api_error(e, "delete_slide")
 
 
+def _delete_slides(
+    service: GoogleSlidesService,
+    nonce_manager: NonceManager,
+    presentation_id: str,
+    slide_ids: str,
+    nonce: str = "",
+) -> str:
+    try:
+        validate_presentation_id(presentation_id)
+        ids = [sid.strip() for sid in slide_ids.split(",") if sid.strip()]
+        if not ids:
+            return _error_response("slide_ids cannot be empty", "VALIDATION_ERROR")
+        if len(ids) > 50:
+            return _error_response(
+                "Cannot delete more than 50 slides at once", "VALIDATION_ERROR"
+            )
+        for sid in ids:
+            validate_slide_id(sid)
+        nonce_key = f"{presentation_id}:bulk:{','.join(sorted(ids))}"
+        if not nonce:
+            new_nonce = nonce_manager.create(nonce_key)
+            logger.info(
+                "delete_slides: nonce created for %s (%d slides)",
+                presentation_id,
+                len(ids),
+            )
+            return json.dumps(
+                {
+                    "presentation_id": presentation_id,
+                    "slide_ids": ids,
+                    "slide_count": len(ids),
+                    "status": "confirm_required",
+                    "nonce": new_nonce,
+                    "expires_in_seconds": 30,
+                    "message": f"Call delete_slides again with this nonce to confirm deletion of {len(ids)} slides.",
+                }
+            )
+        else:
+            if not nonce_manager.verify(nonce_key, nonce):
+                return _error_response(
+                    "Invalid or expired nonce. Please restart the deletion process.",
+                    "NONCE_ERROR",
+                )
+            result = service.delete_slides(presentation_id, ids)
+            logger.info(
+                "delete_slides: deleted %d slides from %s",
+                len(ids),
+                presentation_id,
+            )
+            return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "delete_slides")
+
+
 def _update_slide_text(
     service: GoogleSlidesService,
     presentation_id: str,
@@ -494,6 +550,11 @@ def register_google_slides_tools(
     def delete_slide(presentation_id: str, slide_id: str, nonce: str = "") -> str:
         """Delete a slide from a presentation. Requires two-step nonce confirmation. IMPORTANT: Always confirm with the user before completing the second step."""
         return _delete_slide(service, nonce_manager, presentation_id, slide_id, nonce)
+
+    @mcp.tool()
+    def delete_slides(presentation_id: str, slide_ids: str, nonce: str = "") -> str:
+        """Delete multiple slides at once. slide_ids is comma-separated. Requires two-step nonce confirmation. IMPORTANT: Always confirm with the user before completing the second step, showing the list of slides to be deleted."""
+        return _delete_slides(service, nonce_manager, presentation_id, slide_ids, nonce)
 
     @mcp.tool()
     def update_slide_text(
