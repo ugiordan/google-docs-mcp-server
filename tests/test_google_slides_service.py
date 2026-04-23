@@ -1005,3 +1005,84 @@ class TestReorderSlides:
         result = svc.reorder_slides("pres123", ["slide2", "slide1"], 0)
         assert result["status"] == "reordered"
         assert result["new_position"] == 0
+
+
+class TestUpdateTextStyle:
+    def test_bold_sends_update_text_style_request(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.update_text_style("pres123", "shape1", bold=True)
+        assert result["status"] == "styled"
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        body = call_args[1]["body"] if "body" in call_args[1] else call_args[0][0]
+        reqs = body["requests"]
+        assert len(reqs) == 1
+        assert "updateTextStyle" in reqs[0]
+        assert reqs[0]["updateTextStyle"]["style"]["bold"] is True
+        assert reqs[0]["updateTextStyle"]["textRange"]["type"] == "ALL"
+
+    def test_font_size_and_family(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.update_text_style(
+            "pres123", "shape1", font_family="Roboto", font_size=24.0
+        )
+        assert result["status"] == "styled"
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        body = call_args[1]["body"]
+        reqs = body["requests"]
+        style = reqs[0]["updateTextStyle"]["style"]
+        assert style["fontFamily"] == "Roboto"
+        assert style["fontSize"] == {"magnitude": 24.0, "unit": "PT"}
+
+    def test_foreground_color(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.update_text_style("pres123", "shape1", foreground_color_rgb="#FF0000")
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        body = call_args[1]["body"]
+        style = body["requests"][0]["updateTextStyle"]["style"]
+        color = style["foregroundColor"]["opaqueColor"]["rgbColor"]
+        assert color["red"] == pytest.approx(1.0)
+        assert color["green"] == pytest.approx(0.0)
+        assert color["blue"] == pytest.approx(0.0)
+
+    def test_alignment_sends_paragraph_style(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.update_text_style("pres123", "shape1", alignment="CENTER")
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        body = call_args[1]["body"]
+        reqs = body["requests"]
+        assert len(reqs) == 1
+        assert "updateParagraphStyle" in reqs[0]
+        assert reqs[0]["updateParagraphStyle"]["style"]["alignment"] == "CENTER"
+
+    def test_bold_and_alignment_sends_two_requests(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.update_text_style("pres123", "shape1", bold=True, alignment="END")
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        body = call_args[1]["body"]
+        reqs = body["requests"]
+        assert len(reqs) == 2
+        assert "updateTextStyle" in reqs[0]
+        assert "updateParagraphStyle" in reqs[1]
+
+    def test_no_properties_raises(self):
+        svc, _, _ = _make_service()
+        with pytest.raises(ValueError, match="At least one"):
+            svc.update_text_style("pres123", "shape1")
+
+    def test_fields_mask_matches_properties(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.update_text_style(
+            "pres123", "shape1", bold=True, italic=False, underline=True
+        )
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        body = call_args[1]["body"]
+        fields = body["requests"][0]["updateTextStyle"]["fields"]
+        assert "bold" in fields
+        assert "italic" in fields
+        assert "underline" in fields

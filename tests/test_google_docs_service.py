@@ -1156,3 +1156,142 @@ class TestErrorHandling:
         assert "credentials" not in error_msg.lower()
         assert "secret" not in error_msg.lower()
         assert "token" not in error_msg.lower()
+
+
+class TestUpdateTextStyle:
+    def test_bold_applies_to_full_document(
+        self, service, mock_docs_service, mock_drive_service
+    ):
+        mock_docs_service.documents().get().execute.return_value = {
+            "body": {"content": [{"endIndex": 50}]}
+        }
+        mock_docs_service.documents().batchUpdate().execute.return_value = {}
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Test",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+        }
+        result = service.update_text_style("doc123", bold=True)
+        assert result["id"] == "doc123"
+        call_args = mock_docs_service.documents().batchUpdate.call_args
+        body = call_args[1]["body"]
+        reqs = body["requests"]
+        assert len(reqs) == 1
+        assert "updateTextStyle" in reqs[0]
+        assert reqs[0]["updateTextStyle"]["textStyle"]["bold"] is True
+        assert reqs[0]["updateTextStyle"]["range"]["startIndex"] == 1
+        assert reqs[0]["updateTextStyle"]["range"]["endIndex"] == 49
+
+    def test_explicit_range(self, service, mock_docs_service, mock_drive_service):
+        mock_docs_service.documents().batchUpdate().execute.return_value = {}
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Test",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+        }
+        result = service.update_text_style(
+            "doc123", start_index=5, end_index=15, font_size=12.0
+        )
+        assert result["id"] == "doc123"
+        call_args = mock_docs_service.documents().batchUpdate.call_args
+        body = call_args[1]["body"]
+        rng = body["requests"][0]["updateTextStyle"]["range"]
+        assert rng["startIndex"] == 5
+        assert rng["endIndex"] == 15
+
+    def test_uses_weighted_font_family(
+        self, service, mock_docs_service, mock_drive_service
+    ):
+        mock_docs_service.documents().get().execute.return_value = {
+            "body": {"content": [{"endIndex": 30}]}
+        }
+        mock_docs_service.documents().batchUpdate().execute.return_value = {}
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Test",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+        }
+        service.update_text_style("doc123", font_family="Roboto")
+        call_args = mock_docs_service.documents().batchUpdate.call_args
+        body = call_args[1]["body"]
+        style = body["requests"][0]["updateTextStyle"]["textStyle"]
+        assert style["weightedFontFamily"]["fontFamily"] == "Roboto"
+        assert "fontFamily" not in style
+
+    def test_foreground_color_uses_docs_format(
+        self, service, mock_docs_service, mock_drive_service
+    ):
+        mock_docs_service.documents().get().execute.return_value = {
+            "body": {"content": [{"endIndex": 30}]}
+        }
+        mock_docs_service.documents().batchUpdate().execute.return_value = {}
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Test",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+        }
+        service.update_text_style("doc123", foreground_color_rgb="#00FF00")
+        call_args = mock_docs_service.documents().batchUpdate.call_args
+        body = call_args[1]["body"]
+        style = body["requests"][0]["updateTextStyle"]["textStyle"]
+        color = style["foregroundColor"]["color"]["rgbColor"]
+        assert color["red"] == pytest.approx(0.0)
+        assert color["green"] == pytest.approx(1.0)
+        assert color["blue"] == pytest.approx(0.0)
+
+    def test_alignment_sends_paragraph_style(
+        self, service, mock_docs_service, mock_drive_service
+    ):
+        mock_docs_service.documents().get().execute.return_value = {
+            "body": {"content": [{"endIndex": 30}]}
+        }
+        mock_docs_service.documents().batchUpdate().execute.return_value = {}
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Test",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+        }
+        service.update_text_style("doc123", alignment="CENTER")
+        call_args = mock_docs_service.documents().batchUpdate.call_args
+        body = call_args[1]["body"]
+        reqs = body["requests"]
+        assert len(reqs) == 1
+        assert "updateParagraphStyle" in reqs[0]
+        assert (
+            reqs[0]["updateParagraphStyle"]["paragraphStyle"]["alignment"] == "CENTER"
+        )
+
+    def test_empty_range_raises(self, service, mock_docs_service):
+        mock_docs_service.documents().get().execute.return_value = {
+            "body": {"content": [{"endIndex": 1}]}
+        }
+        with pytest.raises(ValueError, match="empty range"):
+            service.update_text_style("doc123", bold=True)
+
+    def test_no_properties_raises(self, service, mock_docs_service):
+        mock_docs_service.documents().get().execute.return_value = {
+            "body": {"content": [{"endIndex": 30}]}
+        }
+        with pytest.raises(ValueError, match="At least one"):
+            service.update_text_style("doc123")
+
+    def test_with_tab_id(self, service, mock_docs_service, mock_drive_service):
+        mock_docs_service.documents().get().execute.return_value = {
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0"},
+                    "documentTab": {"body": {"content": [{"endIndex": 40}]}},
+                }
+            ]
+        }
+        mock_docs_service.documents().batchUpdate().execute.return_value = {}
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Test",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+        }
+        service.update_text_style("doc123", bold=True, tab_id="t.0")
+        call_args = mock_docs_service.documents().batchUpdate.call_args
+        body = call_args[1]["body"]
+        rng = body["requests"][0]["updateTextStyle"]["range"]
+        assert rng["tabId"] == "t.0"

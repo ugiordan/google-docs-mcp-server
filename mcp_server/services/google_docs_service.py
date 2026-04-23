@@ -881,6 +881,119 @@ class GoogleDocsService:
 
         return self._retry_on_429(_update)
 
+    def update_text_style(
+        self,
+        doc_id,
+        start_index=None,
+        end_index=None,
+        bold=None,
+        italic=None,
+        underline=None,
+        font_family=None,
+        font_size=None,
+        foreground_color_rgb=None,
+        alignment=None,
+        tab_id=None,
+    ):
+        def _update():
+            from mcp_server.tools.common import parse_hex_color
+
+            if start_index is not None and end_index is not None:
+                actual_start = start_index
+                actual_end = end_index
+            else:
+                if tab_id:
+                    doc = (
+                        self.docs_service.documents()
+                        .get(documentId=doc_id, includeTabsContent=True)
+                        .execute()
+                    )
+                    content_end = self._get_tab_end_index(doc, tab_id)
+                else:
+                    doc = self.docs_service.documents().get(documentId=doc_id).execute()
+                    content_end = 1
+                    for item in doc.get("body", {}).get("content", []):
+                        if "endIndex" in item:
+                            content_end = item["endIndex"]
+                actual_start = start_index if start_index is not None else 1
+                actual_end = end_index if end_index is not None else content_end - 1
+
+            if actual_start >= actual_end:
+                raise ValueError("No content to style (empty range)")
+
+            range_dict = {"startIndex": actual_start, "endIndex": actual_end}
+            if tab_id:
+                range_dict["tabId"] = tab_id
+
+            requests = []
+            style = {}
+            fields = []
+
+            if bold is not None:
+                style["bold"] = bold
+                fields.append("bold")
+            if italic is not None:
+                style["italic"] = italic
+                fields.append("italic")
+            if underline is not None:
+                style["underline"] = underline
+                fields.append("underline")
+            if font_family is not None:
+                style["weightedFontFamily"] = {"fontFamily": font_family}
+                fields.append("weightedFontFamily")
+            if font_size is not None:
+                style["fontSize"] = {"magnitude": font_size, "unit": "PT"}
+                fields.append("fontSize")
+            if foreground_color_rgb is not None:
+                style["foregroundColor"] = {
+                    "color": {"rgbColor": parse_hex_color(foreground_color_rgb)}
+                }
+                fields.append("foregroundColor")
+
+            if style:
+                requests.append(
+                    {
+                        "updateTextStyle": {
+                            "range": range_dict,
+                            "textStyle": style,
+                            "fields": ",".join(fields),
+                        }
+                    }
+                )
+
+            if alignment is not None:
+                requests.append(
+                    {
+                        "updateParagraphStyle": {
+                            "range": range_dict,
+                            "paragraphStyle": {"alignment": alignment},
+                            "fields": "alignment",
+                        }
+                    }
+                )
+
+            if not requests:
+                raise ValueError("At least one style property must be specified")
+
+            self.docs_service.documents().batchUpdate(
+                documentId=doc_id, body={"requests": requests}
+            ).execute()
+
+            file_metadata = (
+                self.drive_service.files()
+                .get(fileId=doc_id, fields="id,name,modifiedTime")
+                .execute()
+            )
+
+            return {
+                "id": file_metadata["id"],
+                "name": file_metadata["name"],
+                "url": f"https://docs.google.com/document/d/{doc_id}/edit",
+                "updatedTime": file_metadata.get("modifiedTime"),
+            }
+
+        return self._retry_on_429(_update)
+
     def batch_update(self, doc_id, requests):
         """Apply batch updates to a document.
 

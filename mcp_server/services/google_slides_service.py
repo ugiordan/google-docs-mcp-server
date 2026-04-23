@@ -302,6 +302,86 @@ class GoogleSlidesService:
 
         return retry_on_429(_update)
 
+    def update_text_style(
+        self,
+        presentation_id,
+        shape_id,
+        bold=None,
+        italic=None,
+        underline=None,
+        font_family=None,
+        font_size=None,
+        foreground_color_rgb=None,
+        alignment=None,
+    ):
+        def _update():
+            from mcp_server.tools.common import parse_hex_color
+
+            requests = []
+            style = {}
+            fields = []
+
+            if bold is not None:
+                style["bold"] = bold
+                fields.append("bold")
+            if italic is not None:
+                style["italic"] = italic
+                fields.append("italic")
+            if underline is not None:
+                style["underline"] = underline
+                fields.append("underline")
+            if font_family is not None:
+                style["fontFamily"] = font_family
+                fields.append("fontFamily")
+            if font_size is not None:
+                style["fontSize"] = {"magnitude": font_size, "unit": "PT"}
+                fields.append("fontSize")
+            if foreground_color_rgb is not None:
+                style["foregroundColor"] = {
+                    "opaqueColor": {"rgbColor": parse_hex_color(foreground_color_rgb)}
+                }
+                fields.append("foregroundColor")
+
+            if style:
+                requests.append(
+                    {
+                        "updateTextStyle": {
+                            "objectId": shape_id,
+                            "textRange": {"type": "ALL"},
+                            "style": style,
+                            "fields": ",".join(fields),
+                        }
+                    }
+                )
+
+            if alignment is not None:
+                requests.append(
+                    {
+                        "updateParagraphStyle": {
+                            "objectId": shape_id,
+                            "textRange": {"type": "ALL"},
+                            "style": {"alignment": alignment},
+                            "fields": "alignment",
+                        }
+                    }
+                )
+
+            if not requests:
+                raise ValueError("At least one style property must be specified")
+
+            self.slides_service.presentations().batchUpdate(
+                presentationId=presentation_id,
+                body={"requests": requests},
+            ).execute()
+
+            return {
+                "presentation_id": presentation_id,
+                "shape_id": shape_id,
+                "status": "styled",
+            }
+
+        return retry_on_429(_update)
+
     def delete_shape(self, presentation_id, shape_id):
         def _delete():
             request = {"deleteObject": {"objectId": shape_id}}

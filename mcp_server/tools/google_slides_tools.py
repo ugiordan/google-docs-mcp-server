@@ -7,7 +7,12 @@ from mcp_server.config import SlidesTemplateConfig
 from mcp_server.nonce import NonceManager
 from mcp_server.services.google_slides_service import GoogleSlidesService
 from mcp_server.services.slides_markdown_converter import markdown_to_slide_dicts
-from mcp_server.tools.common import error_response, handle_api_error, tag_untrusted
+from mcp_server.tools.common import (
+    error_response,
+    handle_api_error,
+    parse_hex_color,
+    tag_untrusted,
+)
 from mcp_server.validation import (
     MAX_MARKDOWN_BYTES,
     validate_content_size,
@@ -340,6 +345,81 @@ def _reorder_slides(
         return _handle_api_error(e, "reorder_slides")
 
 
+_VALID_ALIGNMENTS_SLIDES = frozenset({"START", "CENTER", "END", "JUSTIFIED"})
+
+
+def _update_text_style(
+    service: GoogleSlidesService,
+    presentation_id: str,
+    shape_id: str,
+    bold: str = "",
+    italic: str = "",
+    underline: str = "",
+    font_family: str = "",
+    font_size: float = -1,
+    foreground_color: str = "",
+    alignment: str = "",
+) -> str:
+    try:
+        validate_presentation_id(presentation_id)
+        validate_shape_id(shape_id)
+
+        kwargs: dict = {}
+        if bold:
+            if bold.lower() not in ("true", "false"):
+                return _error_response(
+                    "bold must be 'true' or 'false'", "VALIDATION_ERROR"
+                )
+            kwargs["bold"] = bold.lower() == "true"
+        if italic:
+            if italic.lower() not in ("true", "false"):
+                return _error_response(
+                    "italic must be 'true' or 'false'", "VALIDATION_ERROR"
+                )
+            kwargs["italic"] = italic.lower() == "true"
+        if underline:
+            if underline.lower() not in ("true", "false"):
+                return _error_response(
+                    "underline must be 'true' or 'false'", "VALIDATION_ERROR"
+                )
+            kwargs["underline"] = underline.lower() == "true"
+        if font_family:
+            if len(font_family) > 255:
+                return _error_response(
+                    "font_family exceeds 255 characters", "VALIDATION_ERROR"
+                )
+            kwargs["font_family"] = font_family
+        if font_size >= 0:
+            if font_size <= 0 or font_size > 1000:
+                return _error_response(
+                    "font_size must be between 0 and 1000 PT", "VALIDATION_ERROR"
+                )
+            kwargs["font_size"] = font_size
+        if foreground_color:
+            parse_hex_color(foreground_color)
+            kwargs["foreground_color_rgb"] = foreground_color
+        if alignment:
+            if alignment.upper() not in _VALID_ALIGNMENTS_SLIDES:
+                return _error_response(
+                    f"alignment must be one of: {', '.join(sorted(_VALID_ALIGNMENTS_SLIDES))}",
+                    "VALIDATION_ERROR",
+                )
+            kwargs["alignment"] = alignment.upper()
+
+        if not kwargs:
+            return _error_response(
+                "At least one style property must be specified", "VALIDATION_ERROR"
+            )
+
+        result = service.update_text_style(presentation_id, shape_id, **kwargs)
+        logger.info("update_text_style: %s shape=%s", presentation_id, shape_id)
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "update_text_style")
+
+
 def _convert_markdown_to_slides(
     service: GoogleSlidesService,
     template_config: SlidesTemplateConfig,
@@ -441,6 +521,32 @@ def register_google_slides_tools(
     def reorder_slides(presentation_id: str, slide_ids: str, position: int) -> str:
         """Move slides to a new position. slide_ids is comma-separated. Position is 0-indexed."""
         return _reorder_slides(service, presentation_id, slide_ids, position)
+
+    @mcp.tool()
+    def update_text_style(
+        presentation_id: str,
+        shape_id: str,
+        bold: str = "",
+        italic: str = "",
+        underline: str = "",
+        font_family: str = "",
+        font_size: float = -1,
+        foreground_color: str = "",
+        alignment: str = "",
+    ) -> str:
+        """Style all text in a shape without replacing content. Set bold/italic/underline ('true'/'false'), font_family, font_size (PT), foreground_color ('#RRGGBB'), alignment (START/CENTER/END/JUSTIFIED). At least one property required."""
+        return _update_text_style(
+            service,
+            presentation_id,
+            shape_id,
+            bold,
+            italic,
+            underline,
+            font_family,
+            font_size,
+            foreground_color,
+            alignment,
+        )
 
     @mcp.tool()
     def convert_markdown_to_slides(

@@ -24,6 +24,7 @@ from mcp_server.tools.google_docs_tools import (
     _resolve_comment,
     _update_document,
     _update_document_markdown,
+    _update_text_style,
     _upload_document,
 )
 
@@ -1624,3 +1625,208 @@ class TestRenameTab:
         data = json.loads(result)
 
         assert data["code"] == "API_ERROR"
+
+
+class TestUpdateTextStyle:
+    def test_bold_and_font_size(self):
+        service = MagicMock()
+        service.update_text_style.return_value = {
+            "id": "doc1234567890",
+            "name": "Test Doc",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2024-01-01T00:00:00Z",
+        }
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", bold="true", font_size=14.0)
+        )
+        assert result["id"] == "doc1234567890"
+        service.update_text_style.assert_called_once_with(
+            "doc1234567890", bold=True, font_size=14.0
+        )
+
+    def test_all_properties(self):
+        service = MagicMock()
+        service.update_text_style.return_value = {
+            "id": "doc1234567890",
+            "name": "Test Doc",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2024-01-01T00:00:00Z",
+        }
+        result = json.loads(
+            _update_text_style(
+                service,
+                "doc1234567890",
+                start_index=5,
+                end_index=20,
+                bold="true",
+                italic="false",
+                underline="true",
+                font_family="Arial",
+                font_size=18.0,
+                foreground_color="#FF0000",
+                alignment="CENTER",
+                tab_id="t.0",
+            )
+        )
+        assert result["id"] == "doc1234567890"
+        service.update_text_style.assert_called_once_with(
+            "doc1234567890",
+            start_index=5,
+            end_index=20,
+            bold=True,
+            italic=False,
+            underline=True,
+            font_family="Arial",
+            font_size=18.0,
+            foreground_color_rgb="#FF0000",
+            alignment="CENTER",
+            tab_id="t.0",
+        )
+
+    def test_no_properties_returns_error(self):
+        service = MagicMock()
+        result = json.loads(_update_text_style(service, "doc1234567890"))
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "At least one" in result["error"]
+
+    def test_only_range_no_style_returns_error(self):
+        service = MagicMock()
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", start_index=0, end_index=10)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "At least one" in result["error"]
+
+    def test_invalid_bold_value(self):
+        service = MagicMock()
+        result = json.loads(_update_text_style(service, "doc1234567890", bold="yes"))
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "bold" in result["error"]
+
+    def test_invalid_italic_value(self):
+        service = MagicMock()
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", italic="maybe")
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_underline_value(self):
+        service = MagicMock()
+        result = json.loads(_update_text_style(service, "doc1234567890", underline="1"))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_alignment(self):
+        service = MagicMock()
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", alignment="LEFT")
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "alignment" in result["error"]
+
+    def test_valid_alignments(self):
+        for align in ("START", "CENTER", "END", "JUSTIFIED"):
+            service = MagicMock()
+            service.update_text_style.return_value = {
+                "id": "doc1234567890",
+                "name": "D",
+                "url": "https://docs.google.com/document/d/doc1234567890/edit",
+                "updatedTime": "2024-01-01T00:00:00Z",
+            }
+            result = json.loads(
+                _update_text_style(service, "doc1234567890", alignment=align)
+            )
+            assert "id" in result
+
+    def test_alignment_case_insensitive(self):
+        service = MagicMock()
+        service.update_text_style.return_value = {
+            "id": "doc1234567890",
+            "name": "D",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2024-01-01T00:00:00Z",
+        }
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", alignment="justified")
+        )
+        assert "id" in result
+        service.update_text_style.assert_called_once_with(
+            "doc1234567890", alignment="JUSTIFIED"
+        )
+
+    def test_invalid_color_format(self):
+        service = MagicMock()
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", foreground_color="red")
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_valid_hex_color(self):
+        service = MagicMock()
+        service.update_text_style.return_value = {
+            "id": "doc1234567890",
+            "name": "D",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2024-01-01T00:00:00Z",
+        }
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", foreground_color="#00FF00")
+        )
+        assert "id" in result
+
+    def test_font_size_zero_returns_error(self):
+        service = MagicMock()
+        result = json.loads(_update_text_style(service, "doc1234567890", font_size=0.0))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_font_size_too_large(self):
+        service = MagicMock()
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", font_size=1001.0)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_font_family_too_long(self):
+        service = MagicMock()
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", font_family="A" * 256)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_document_id(self):
+        service = MagicMock()
+        result = json.loads(_update_text_style(service, "bad!", bold="true"))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_with_tab_id(self):
+        service = MagicMock()
+        service.update_text_style.return_value = {
+            "id": "doc1234567890",
+            "name": "D",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2024-01-01T00:00:00Z",
+        }
+        result = json.loads(
+            _update_text_style(service, "doc1234567890", bold="true", tab_id="t.0")
+        )
+        assert "id" in result
+        service.update_text_style.assert_called_once_with(
+            "doc1234567890", bold=True, tab_id="t.0"
+        )
+
+    def test_name_tagged_untrusted(self):
+        service = MagicMock()
+        service.update_text_style.return_value = {
+            "id": "doc1234567890",
+            "name": "My Doc",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2024-01-01T00:00:00Z",
+        }
+        result = json.loads(_update_text_style(service, "doc1234567890", bold="true"))
+        assert "<untrusted-data-" in result["name"]
+        assert "My Doc" in result["name"]
+
+    def test_api_error(self):
+        service = MagicMock()
+        service.update_text_style.side_effect = Exception("API failure")
+        result = json.loads(_update_text_style(service, "doc1234567890", bold="true"))
+        assert result["code"] == "API_ERROR"

@@ -15,7 +15,12 @@ from mcp_server.services.markdown_converter import (
     extract_template_styles,
     parse_markdown,
 )
-from mcp_server.tools.common import error_response, handle_api_error, tag_untrusted
+from mcp_server.tools.common import (
+    error_response,
+    handle_api_error,
+    parse_hex_color,
+    tag_untrusted,
+)
 from mcp_server.validation import (
     MAX_CONTENT_BYTES,
     MAX_MARKDOWN_BYTES,
@@ -683,6 +688,103 @@ def _update_document_markdown(
         return _handle_api_error(e, "update_document_markdown")
 
 
+_VALID_ALIGNMENTS_DOCS = frozenset({"START", "CENTER", "END", "JUSTIFIED"})
+
+
+def _update_text_style(
+    service: GoogleDocsService,
+    document_id: str,
+    start_index: int = -1,
+    end_index: int = -1,
+    bold: str = "",
+    italic: str = "",
+    underline: str = "",
+    font_family: str = "",
+    font_size: float = -1,
+    foreground_color: str = "",
+    alignment: str = "",
+    tab_id: str = "",
+) -> str:
+    try:
+        validate_document_id(document_id)
+        if tab_id:
+            validate_tab_id(tab_id)
+
+        kwargs: dict = {}
+        if start_index >= 0:
+            kwargs["start_index"] = start_index
+        if end_index >= 0:
+            kwargs["end_index"] = end_index
+        if bold:
+            if bold.lower() not in ("true", "false"):
+                return _error_response(
+                    "bold must be 'true' or 'false'", "VALIDATION_ERROR"
+                )
+            kwargs["bold"] = bold.lower() == "true"
+        if italic:
+            if italic.lower() not in ("true", "false"):
+                return _error_response(
+                    "italic must be 'true' or 'false'", "VALIDATION_ERROR"
+                )
+            kwargs["italic"] = italic.lower() == "true"
+        if underline:
+            if underline.lower() not in ("true", "false"):
+                return _error_response(
+                    "underline must be 'true' or 'false'", "VALIDATION_ERROR"
+                )
+            kwargs["underline"] = underline.lower() == "true"
+        if font_family:
+            if len(font_family) > 255:
+                return _error_response(
+                    "font_family exceeds 255 characters", "VALIDATION_ERROR"
+                )
+            kwargs["font_family"] = font_family
+        if font_size >= 0:
+            if font_size <= 0 or font_size > 1000:
+                return _error_response(
+                    "font_size must be between 0 and 1000 PT", "VALIDATION_ERROR"
+                )
+            kwargs["font_size"] = font_size
+        if foreground_color:
+            parse_hex_color(foreground_color)
+            kwargs["foreground_color_rgb"] = foreground_color
+        if alignment:
+            if alignment.upper() not in _VALID_ALIGNMENTS_DOCS:
+                return _error_response(
+                    f"alignment must be one of: {', '.join(sorted(_VALID_ALIGNMENTS_DOCS))}",
+                    "VALIDATION_ERROR",
+                )
+            kwargs["alignment"] = alignment.upper()
+        if tab_id:
+            kwargs["tab_id"] = tab_id
+
+        if not any(
+            k in kwargs
+            for k in (
+                "bold",
+                "italic",
+                "underline",
+                "font_family",
+                "font_size",
+                "foreground_color_rgb",
+                "alignment",
+            )
+        ):
+            return _error_response(
+                "At least one style property must be specified", "VALIDATION_ERROR"
+            )
+
+        result = service.update_text_style(document_id, **kwargs)
+        if "name" in result:
+            result["name"] = _tag_untrusted(result["name"])
+        logger.info("update_text_style: %s", document_id)
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "update_text_style")
+
+
 def register_google_docs_tools(
     mcp,
     service: GoogleDocsService,
@@ -813,5 +915,35 @@ def register_google_docs_tools(
             document_id,
             markdown_content,
             template_name,
+            tab_id,
+        )
+
+    @mcp.tool()
+    def update_text_style(
+        document_id: str,
+        start_index: int = -1,
+        end_index: int = -1,
+        bold: str = "",
+        italic: str = "",
+        underline: str = "",
+        font_family: str = "",
+        font_size: float = -1,
+        foreground_color: str = "",
+        alignment: str = "",
+        tab_id: str = "",
+    ) -> str:
+        """Style text in a Google Doc without replacing content. Applies to entire document/tab by default, or specify start_index/end_index for a range. Set bold/italic/underline ('true'/'false'), font_family, font_size (PT), foreground_color ('#RRGGBB'), alignment (START/CENTER/END/JUSTIFIED). At least one style property required. Use tab_id to target a specific tab."""
+        return _update_text_style(
+            service,
+            document_id,
+            start_index,
+            end_index,
+            bold,
+            italic,
+            underline,
+            font_family,
+            font_size,
+            foreground_color,
+            alignment,
             tab_id,
         )
