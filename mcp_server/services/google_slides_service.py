@@ -376,25 +376,69 @@ class GoogleSlidesService:
         presentation_id = result["id"]
 
         try:
+            _init_fields = (
+                "slides.objectId,"
+                "layouts.objectId,"
+                "layouts.layoutProperties.displayName,"
+                "layouts.pageElements.shape.placeholder.type"
+            )
             presentation = retry_on_429(
                 lambda: self.slides_service.presentations()
-                .get(presentationId=presentation_id)
+                .get(presentationId=presentation_id, fields=_init_fields)
                 .execute()
             )
             default_slide_ids = [s["objectId"] for s in presentation.get("slides", [])]
 
+            title_body_layout_id = None
+            title_only_layout_id = None
+            if template_presentation_id:
+                for layout in presentation.get("layouts", []):
+                    placeholders = set()
+                    for el in layout.get("pageElements", []):
+                        pt = el.get("shape", {}).get("placeholder", {}).get("type")
+                        if pt:
+                            placeholders.add(pt)
+                    if "TITLE" in placeholders and "BODY" in placeholders:
+                        if not title_body_layout_id:
+                            title_body_layout_id = layout["objectId"]
+                    elif "TITLE" in placeholders and "BODY" not in placeholders:
+                        if not title_only_layout_id:
+                            title_only_layout_id = layout["objectId"]
+
+                if default_slide_ids:
+                    delete_requests = [
+                        {"deleteObject": {"objectId": sid}} for sid in default_slide_ids
+                    ]
+                    retry_on_429(
+                        lambda: self.slides_service.presentations()
+                        .batchUpdate(
+                            presentationId=presentation_id,
+                            body={"requests": delete_requests},
+                        )
+                        .execute()
+                    )
+                    default_slide_ids = []
+
             requests = []
             for i, slide_data in enumerate(slide_dicts):
+                has_body = bool(slide_data.get("body_text"))
+                if template_presentation_id and (
+                    title_body_layout_id or title_only_layout_id
+                ):
+                    layout_id = (
+                        title_body_layout_id if has_body else title_only_layout_id
+                    ) or title_body_layout_id
+                    layout_ref = {"layoutId": layout_id}
+                else:
+                    layout_ref = {
+                        "predefinedLayout": (
+                            "TITLE_AND_BODY" if has_body else "TITLE_ONLY"
+                        )
+                    }
                 create_req = {
                     "createSlide": {
                         "insertionIndex": i,
-                        "slideLayoutReference": {
-                            "predefinedLayout": (
-                                "TITLE_AND_BODY"
-                                if slide_data.get("body_text")
-                                else "TITLE_ONLY"
-                            )
-                        },
+                        "slideLayoutReference": layout_ref,
                     }
                 }
                 requests.append(create_req)
@@ -415,9 +459,16 @@ class GoogleSlidesService:
                     if "createSlide" in r
                 ]
 
+                _convert_fields = (
+                    "slides.objectId,"
+                    "slides.pageElements.objectId,"
+                    "slides.pageElements.shape.placeholder.type,"
+                    "slides.pageElements.shape.text,"
+                    "slides.slideProperties.notesPage"
+                )
                 presentation = retry_on_429(
                     lambda: self.slides_service.presentations()
-                    .get(presentationId=presentation_id)
+                    .get(presentationId=presentation_id, fields=_convert_fields)
                     .execute()
                 )
 

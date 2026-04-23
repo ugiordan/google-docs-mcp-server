@@ -1,5 +1,6 @@
 """Tests for GoogleSlidesService."""
 
+import unittest.mock
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -570,6 +571,76 @@ class TestConvertMarkdownToSlides:
         slide_dicts = [{"title": "Only Title", "body_text": "", "speaker_notes": ""}]
         result = svc.convert_markdown_to_slides("Title Only", slide_dicts)
         assert result["slide_count"] == 1
+
+    def test_template_deletes_default_slides_before_creating(self):
+        svc, mock_slides, mock_drive = _make_service()
+
+        mock_drive.files().copy().execute.return_value = {
+            "id": "from_template",
+            "name": "Templated",
+        }
+
+        batch_call_bodies = []
+
+        def capture_batch(**kwargs):
+            batch_call_bodies.append(kwargs.get("body", {}).get("requests", []))
+            mock_result = unittest.mock.MagicMock()
+            mock_result.execute.return_value = {
+                "replies": [{"createSlide": {"objectId": "new_s0"}}]
+            }
+            return mock_result
+
+        mock_slides.presentations().batchUpdate.side_effect = capture_batch
+
+        mock_slides.presentations().get().execute.side_effect = [
+            {
+                "slides": [{"objectId": "tmpl_slide_1"}],
+                "layouts": [
+                    {
+                        "objectId": "layout_tb",
+                        "layoutProperties": {"displayName": "Title and Body"},
+                        "pageElements": [
+                            {"shape": {"placeholder": {"type": "TITLE"}}},
+                            {"shape": {"placeholder": {"type": "BODY"}}},
+                        ],
+                    }
+                ],
+            },
+            {
+                "slides": [
+                    {
+                        "objectId": "new_s0",
+                        "slideProperties": {},
+                        "pageElements": [
+                            {
+                                "objectId": "t0",
+                                "shape": {
+                                    "placeholder": {"type": "TITLE"},
+                                    "text": {"textElements": []},
+                                },
+                            },
+                            {
+                                "objectId": "b0",
+                                "shape": {
+                                    "placeholder": {"type": "BODY"},
+                                    "text": {"textElements": []},
+                                },
+                            },
+                        ],
+                    }
+                ]
+            },
+        ]
+
+        slide_dicts = [{"title": "Hi", "body_text": "There", "speaker_notes": ""}]
+        result = svc.convert_markdown_to_slides(
+            "Templated", slide_dicts, template_presentation_id="tmpl_id"
+        )
+
+        assert result["id"] == "from_template"
+        assert len(batch_call_bodies) >= 2
+        assert batch_call_bodies[0][0].get("deleteObject") is not None
+        assert batch_call_bodies[1][0].get("createSlide") is not None
 
     def test_failure_after_creation_includes_id(self):
         svc, mock_slides, mock_drive = _make_service()
