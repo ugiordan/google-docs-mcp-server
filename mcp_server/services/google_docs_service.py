@@ -1,11 +1,10 @@
 """Google Docs service layer for API interactions."""
 
-import time
-
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaInMemoryUpload
 
+from mcp_server.utils.retry import retry_on_429
 from mcp_server.validation import sanitize_query
 
 
@@ -92,32 +91,9 @@ class GoogleDocsService:
                 return end_index
         raise ValueError(f"Tab '{tab_id}' not found in document")
 
-    def _retry_on_429(self, fn, max_retries=3):
-        """Execute function with retry logic for 429 rate limit errors.
-
-        Args:
-            fn: Function to execute
-            max_retries: Maximum number of retries (default: 3)
-
-        Returns:
-            Result of the function call
-
-        Raises:
-            HttpError: If max retries exceeded or non-429 error occurs
-        """
-        retries = 0
-        backoff = 1  # Start with 1 second
-
-        while True:
-            try:
-                return fn()
-            except HttpError as e:
-                if e.resp.status == 429 and retries < max_retries:
-                    time.sleep(backoff)
-                    retries += 1
-                    backoff *= 2  # Exponential backoff
-                else:
-                    raise
+    @staticmethod
+    def _retry_on_429(fn, max_retries=3):
+        return retry_on_429(fn, max_retries)
 
     def list_documents(self, query=None, max_results=10):
         """List Google Docs documents.

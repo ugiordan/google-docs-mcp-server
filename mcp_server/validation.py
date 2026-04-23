@@ -103,6 +103,36 @@ def validate_tab_id(tab_id: str) -> bool:
     return True
 
 
+def validate_presentation_id(presentation_id: str) -> bool:
+    if not presentation_id:
+        raise ValueError("Presentation ID cannot be empty")
+    if not _ID_PATTERN.match(presentation_id):
+        raise ValueError(
+            "Invalid presentation ID format: must be 10-100 alphanumeric characters, hyphens, or underscores"
+        )
+    return True
+
+
+def validate_slide_id(slide_id: str) -> bool:
+    if not slide_id:
+        raise ValueError("Slide ID cannot be empty")
+    if not _TAB_ID_PATTERN.match(slide_id):
+        raise ValueError(
+            "Invalid slide ID format: must be 1-100 alphanumeric characters, dots, hyphens, or underscores"
+        )
+    return True
+
+
+def validate_shape_id(shape_id: str) -> bool:
+    if not shape_id:
+        raise ValueError("Shape ID cannot be empty")
+    if not _TAB_ID_PATTERN.match(shape_id):
+        raise ValueError(
+            "Invalid shape ID format: must be 1-100 alphanumeric characters, dots, hyphens, or underscores"
+        )
+    return True
+
+
 def validate_mime_type(mime_type: str) -> bool:
     if not mime_type:
         raise ValueError("MIME type cannot be empty")

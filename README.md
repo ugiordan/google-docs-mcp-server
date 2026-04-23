@@ -1,10 +1,10 @@
 # Google Docs MCP Server
 
-A Model Context Protocol (MCP) server that provides Google Docs read and write operations over stdio transport. Built with [FastMCP](https://github.com/jlowin/fastmcp), packaged as a hardened Podman container.
+A Model Context Protocol (MCP) server that provides Google Docs and Google Slides read and write operations over stdio transport. Built with [FastMCP](https://github.com/jlowin/fastmcp), packaged as a hardened Podman container.
 
 ## Features
 
-- 18 tools for document lifecycle management: list, read, create, update, delete, comment (add, list, reply, resolve, delete), move, folder lookup, markdown-to-doc conversion, file upload, markdown update, and tab management (create, delete, rename)
+- 28 tools for document and presentation lifecycle management: Docs (list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc, file upload, markdown update, tab management) and Slides (list, read, create, add/delete/duplicate/reorder slides, update text, speaker notes, markdown-to-slides)
 - OAuth 2.0 authentication with scopes (`drive`, `drive.metadata.readonly`, `documents`)
 - Container hardening: read-only filesystem, all capabilities dropped, non-root execution, memory-limited
 - Two-step delete confirmation via server-side cryptographic nonce
@@ -145,6 +145,17 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `convert_markdown_to_doc` | Convert markdown to a styled document | `markdown_content` (str), `title` (str), `template_name` (str, optional), `folder_id` (str, optional) |
 | `upload_document` | Upload a file as a Google Doc with formatting preserved | `title` (str), `file_path` (str, optional), `file_content_base64` (str, optional), `source_file_id` (str, optional), `mime_type` (str, optional), `folder_id` (str, optional) |
 | `update_document_markdown` | Replace content of an existing Google Doc with styled markdown | `document_id` (str), `markdown_content` (str), `template_name` (str, optional), `tab_id` (str, optional) |
+| **Google Slides** | | |
+| `list_presentations` | List presentations, optionally filtered by name | `query` (str, optional), `max_results` (int, 1-100, default 10) |
+| `read_presentation` | Read all slide content: text, speaker notes, shape IDs, layout info | `presentation_id` (str) |
+| `create_presentation` | Create a new presentation | `title` (str), `folder_id` (str, optional) |
+| `add_slide` | Add a slide at a position with optional layout | `presentation_id` (str), `position` (int, optional), `layout` (str, optional) |
+| `delete_slide` | Delete a slide | `presentation_id` (str), `slide_id` (str) |
+| `update_slide_text` | Replace text in a specific shape on a slide | `presentation_id` (str), `slide_id` (str), `shape_id` (str), `content` (str) |
+| `update_speaker_notes` | Set speaker notes for a slide | `presentation_id` (str), `slide_id` (str), `notes` (str) |
+| `duplicate_slide` | Copy a slide within a presentation | `presentation_id` (str), `slide_id` (str), `position` (int, optional) |
+| `reorder_slides` | Move slides to new positions | `presentation_id` (str), `slide_ids` (str, comma-separated), `position` (int) |
+| `convert_markdown_to_slides` | Convert markdown to a presentation (slides split on `---`) | `markdown_content` (str), `title` (str), `folder_id` (str, optional) |
 
 ### Delete confirmation
 
@@ -264,7 +275,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (317 unit tests)
+# Run tests (386 unit tests)
 uv run pytest -v
 
 # Lint and format

@@ -11,7 +11,9 @@ from mcp_server.auth import load_tokens
 from mcp_server.config import load_templates
 from mcp_server.nonce import NonceManager
 from mcp_server.services.google_docs_service import GoogleDocsService
+from mcp_server.services.google_slides_service import GoogleSlidesService
 from mcp_server.tools.google_docs_tools import register_google_docs_tools
+from mcp_server.tools.google_slides_tools import register_google_slides_tools
 
 
 class JsonFormatter(logging.Formatter):
@@ -70,7 +72,9 @@ def create_server() -> FastMCP:
 
     # Register tools
     if service:
+        slides_service = GoogleSlidesService(creds)
         register_google_docs_tools(mcp, service, nonce_manager, template_config)
+        register_google_slides_tools(mcp, slides_service)
     else:
         # Register a single tool that tells the user to authenticate
         @mcp.tool()
