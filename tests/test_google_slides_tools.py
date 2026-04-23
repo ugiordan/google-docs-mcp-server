@@ -9,6 +9,7 @@ from mcp_server.tools.google_slides_tools import (
     _add_slide,
     _convert_markdown_to_slides,
     _create_presentation,
+    _delete_shape,
     _delete_slide,
     _duplicate_slide,
     _error_response,
@@ -152,6 +153,37 @@ class TestUpdateSlideText:
             _update_slide_text(svc, "pres1234567", "s1", "", "text")
         )
         assert result["code"] == "VALIDATION_ERROR"
+
+
+class TestDeleteShape:
+    def test_success(self):
+        svc = _mock_service()
+        svc.delete_shape.return_value = {
+            "presentation_id": "pres1234567",
+            "shape_id": "img1",
+            "status": "deleted",
+        }
+        result = json.loads(_delete_shape(svc, "pres1234567", "img1"))
+        assert result["status"] == "deleted"
+        assert result["shape_id"] == "img1"
+
+    def test_invalid_presentation_id(self):
+        svc = _mock_service()
+        result = json.loads(_delete_shape(svc, "bad", "img1"))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_shape_id(self):
+        svc = _mock_service()
+        result = json.loads(_delete_shape(svc, "pres1234567", ""))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_api_error(self):
+        svc = _mock_service()
+        resp = MagicMock()
+        resp.status = 500
+        svc.delete_shape.side_effect = HttpError(resp, b"error")
+        result = json.loads(_delete_shape(svc, "pres1234567", "img1"))
+        assert result["code"] == "API_ERROR"
 
 
 class TestUpdateSpeakerNotes:

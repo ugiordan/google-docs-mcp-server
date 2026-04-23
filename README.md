@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that provides Google Docs and Google Slide
 
 ## Features
 
-- 28 tools for document and presentation lifecycle management: Docs (list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc, file upload, markdown update, tab management) and Slides (list, read, create, add/delete/duplicate/reorder slides, update text, speaker notes, markdown-to-slides)
+- 29 tools for document and presentation lifecycle management: Docs (list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc, file upload, markdown update, tab management) and Slides (list, read, create, add/delete/duplicate/reorder slides, update text, delete shape, speaker notes, markdown-to-slides)
 - OAuth 2.0 authentication with scopes (`drive`, `drive.metadata.readonly`, `documents`)
 - Container hardening: read-only filesystem, all capabilities dropped, non-root execution, memory-limited
 - Two-step delete confirmation via server-side cryptographic nonce
@@ -151,7 +151,8 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `create_presentation` | Create a new presentation | `title` (str), `folder_id` (str, optional) |
 | `add_slide` | Add a slide at a position with optional layout | `presentation_id` (str), `position` (int, optional), `layout` (str, optional) |
 | `delete_slide` | Delete a slide | `presentation_id` (str), `slide_id` (str) |
-| `update_slide_text` | Replace text in a specific shape on a slide | `presentation_id` (str), `slide_id` (str), `shape_id` (str), `content` (str) |
+| `update_slide_text` | Replace text in a shape, preserving font/size/color | `presentation_id` (str), `slide_id` (str), `shape_id` (str), `content` (str) |
+| `delete_shape` | Delete a shape, image, or element from a slide | `presentation_id` (str), `shape_id` (str) |
 | `update_speaker_notes` | Set speaker notes for a slide | `presentation_id` (str), `slide_id` (str), `notes` (str) |
 | `duplicate_slide` | Copy a slide within a presentation | `presentation_id` (str), `slide_id` (str), `position` (int, optional) |
 | `reorder_slides` | Move slides to new positions | `presentation_id` (str), `slide_ids` (str, comma-separated), `position` (int) |
@@ -275,7 +276,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (386 unit tests)
+# Run tests (460 unit tests)
 uv run pytest -v
 
 # Lint and format

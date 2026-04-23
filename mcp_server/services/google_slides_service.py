@@ -167,6 +167,10 @@ class GoogleSlidesService:
 
     def update_slide_text(self, presentation_id, slide_id, shape_id, content):
         def _update():
+            saved_style = self._read_shape_style(
+                presentation_id, slide_id, shape_id
+            )
+
             requests = [
                 {
                     "deleteText": {
@@ -182,6 +186,20 @@ class GoogleSlidesService:
                     }
                 },
             ]
+
+            if saved_style:
+                fields = ",".join(saved_style.keys())
+                requests.append(
+                    {
+                        "updateTextStyle": {
+                            "objectId": shape_id,
+                            "textRange": {"type": "ALL"},
+                            "style": saved_style,
+                            "fields": fields,
+                        }
+                    }
+                )
+
             self.slides_service.presentations().batchUpdate(
                 presentationId=presentation_id, body={"requests": requests}
             ).execute()
@@ -193,6 +211,20 @@ class GoogleSlidesService:
             }
 
         return retry_on_429(_update)
+
+    def delete_shape(self, presentation_id, shape_id):
+        def _delete():
+            request = {"deleteObject": {"objectId": shape_id}}
+            self.slides_service.presentations().batchUpdate(
+                presentationId=presentation_id, body={"requests": [request]}
+            ).execute()
+            return {
+                "presentation_id": presentation_id,
+                "shape_id": shape_id,
+                "status": "deleted",
+            }
+
+        return retry_on_429(_delete)
 
     def update_speaker_notes(self, presentation_id, slide_id, notes):
         def _update():
@@ -432,6 +464,44 @@ class GoogleSlidesService:
             }
 
         return retry_on_429(_convert)
+
+    _STYLE_FIELDS = [
+        "fontFamily",
+        "fontSize",
+        "foregroundColor",
+        "bold",
+        "italic",
+        "underline",
+        "strikethrough",
+        "backgroundColor",
+    ]
+
+    def _read_shape_style(self, presentation_id, slide_id, shape_id):
+        presentation = (
+            self.slides_service.presentations()
+            .get(presentationId=presentation_id)
+            .execute()
+        )
+        for slide in presentation.get("slides", []):
+            if slide["objectId"] != slide_id:
+                continue
+            for element in slide.get("pageElements", []):
+                if element.get("objectId") != shape_id:
+                    continue
+                text_elements = (
+                    element.get("shape", {})
+                    .get("text", {})
+                    .get("textElements", [])
+                )
+                for te in text_elements:
+                    style = te.get("textRun", {}).get("style", {})
+                    if style:
+                        return {
+                            k: v
+                            for k, v in style.items()
+                            if k in self._STYLE_FIELDS and v is not None
+                        }
+        return {}
 
     @staticmethod
     def _extract_text(text_obj):

@@ -135,10 +135,116 @@ class TestDeleteSlide:
 class TestUpdateSlideText:
     def test_updates_text(self):
         svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "slides": [
+                {
+                    "objectId": "slide1",
+                    "pageElements": [
+                        {
+                            "objectId": "shape1",
+                            "shape": {
+                                "text": {
+                                    "textElements": [
+                                        {
+                                            "textRun": {
+                                                "content": "Old text",
+                                                "style": {
+                                                    "fontFamily": "Arial",
+                                                    "fontSize": {"magnitude": 18, "unit": "PT"},
+                                                },
+                                            }
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
         mock_slides.presentations().batchUpdate().execute.return_value = {}
         result = svc.update_slide_text("pres123", "slide1", "shape1", "New text")
         assert result["status"] == "updated"
         assert result["shape_id"] == "shape1"
+
+    def test_preserves_style(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "slides": [
+                {
+                    "objectId": "s1",
+                    "pageElements": [
+                        {
+                            "objectId": "sh1",
+                            "shape": {
+                                "text": {
+                                    "textElements": [
+                                        {
+                                            "textRun": {
+                                                "content": "Styled",
+                                                "style": {
+                                                    "fontFamily": "Roboto",
+                                                    "fontSize": {"magnitude": 24, "unit": "PT"},
+                                                    "bold": True,
+                                                    "foregroundColor": {"opaqueColor": {"rgbColor": {"red": 1.0}}},
+                                                },
+                                            }
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.update_slide_text("pres123", "s1", "sh1", "New")
+
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        requests = call_args[1]["body"]["requests"]
+        assert len(requests) == 3
+        style_req = requests[2]["updateTextStyle"]
+        assert style_req["style"]["fontFamily"] == "Roboto"
+        assert style_req["style"]["bold"] is True
+        assert "fontSize" in style_req["fields"]
+
+    def test_no_style_skips_update_text_style(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "slides": [
+                {
+                    "objectId": "s1",
+                    "pageElements": [
+                        {
+                            "objectId": "sh1",
+                            "shape": {"text": {"textElements": []}},
+                        }
+                    ],
+                }
+            ]
+        }
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.update_slide_text("pres123", "s1", "sh1", "Text")
+
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        requests = call_args[1]["body"]["requests"]
+        assert len(requests) == 2
+
+
+class TestDeleteShape:
+    def test_deletes_shape(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.delete_shape("pres123", "img1")
+        assert result["status"] == "deleted"
+        assert result["shape_id"] == "img1"
+
+    def test_returns_presentation_id(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.delete_shape("pres123", "shape1")
+        assert result["presentation_id"] == "pres123"
 
 
 class TestUpdateSpeakerNotes:
@@ -409,6 +515,79 @@ class TestConvertMarkdownToSlides:
             folder_id="folder123"
         )
         assert result["id"] == "p1"
+
+
+class TestReadShapeStyle:
+    def test_extracts_style_from_first_text_run(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "slides": [
+                {
+                    "objectId": "s1",
+                    "pageElements": [
+                        {
+                            "objectId": "sh1",
+                            "shape": {
+                                "text": {
+                                    "textElements": [
+                                        {
+                                            "textRun": {
+                                                "content": "Hello",
+                                                "style": {
+                                                    "fontFamily": "Roboto",
+                                                    "fontSize": {"magnitude": 14, "unit": "PT"},
+                                                    "bold": False,
+                                                    "link": {"url": "https://example.com"},
+                                                },
+                                            }
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        style = svc._read_shape_style("pres1", "s1", "sh1")
+        assert style["fontFamily"] == "Roboto"
+        assert style["fontSize"] == {"magnitude": 14, "unit": "PT"}
+        assert style["bold"] is False
+        assert "link" not in style
+
+    def test_returns_empty_for_missing_shape(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "slides": [
+                {
+                    "objectId": "s1",
+                    "pageElements": [],
+                }
+            ]
+        }
+        assert svc._read_shape_style("pres1", "s1", "missing") == {}
+
+    def test_returns_empty_for_no_text_runs(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "slides": [
+                {
+                    "objectId": "s1",
+                    "pageElements": [
+                        {
+                            "objectId": "sh1",
+                            "shape": {"text": {"textElements": [{"paragraphMarker": {}}]}},
+                        }
+                    ],
+                }
+            ]
+        }
+        assert svc._read_shape_style("pres1", "s1", "sh1") == {}
+
+    def test_returns_empty_for_missing_slide(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {"slides": []}
+        assert svc._read_shape_style("pres1", "missing", "sh1") == {}
 
 
 class TestExtractText:

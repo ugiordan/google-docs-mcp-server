@@ -202,6 +202,25 @@ def _update_slide_text(
         return _handle_api_error(e, "update_slide_text")
 
 
+def _delete_shape(
+    service: GoogleSlidesService,
+    presentation_id: str,
+    shape_id: str,
+) -> str:
+    try:
+        validate_presentation_id(presentation_id)
+        validate_shape_id(shape_id)
+        result = service.delete_shape(presentation_id, shape_id)
+        logger.info(
+            "delete_shape: %s shape=%s", presentation_id, shape_id
+        )
+        return json.dumps(result)
+    except ValueError as e:
+        return _error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return _handle_api_error(e, "delete_shape")
+
+
 def _update_speaker_notes(
     service: GoogleSlidesService,
     presentation_id: str,
@@ -344,10 +363,15 @@ def register_google_slides_tools(mcp, service: GoogleSlidesService):
     def update_slide_text(
         presentation_id: str, slide_id: str, shape_id: str, content: str
     ) -> str:
-        """Replace text in a specific shape on a slide. Use read_presentation to find shape IDs. Warning: replaces all text and formatting in the shape."""
+        """Replace text in a specific shape on a slide. Use read_presentation to find shape IDs. Preserves the shape's original font family, size, color, and style."""
         return _update_slide_text(
             service, presentation_id, slide_id, shape_id, content
         )
+
+    @mcp.tool()
+    def delete_shape(presentation_id: str, shape_id: str) -> str:
+        """Delete a shape, image, or other element from a slide. Use read_presentation to find shape IDs. IMPORTANT: Always confirm with the user before deleting."""
+        return _delete_shape(service, presentation_id, shape_id)
 
     @mcp.tool()
     def update_speaker_notes(
