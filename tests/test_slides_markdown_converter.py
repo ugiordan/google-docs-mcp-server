@@ -107,7 +107,9 @@ class TestExtractSpeakerNotes:
         assert content.strip() == "Content here"
 
     def test_multiple_notes_blocks_takes_first(self):
-        chunk = "# Title\n:::notes\nFirst notes\n:::\nMiddle\n:::notes\nSecond notes\n:::"
+        chunk = (
+            "# Title\n:::notes\nFirst notes\n:::\nMiddle\n:::notes\nSecond notes\n:::"
+        )
         content, notes = extract_speaker_notes(chunk)
         assert notes == "First notes"
 

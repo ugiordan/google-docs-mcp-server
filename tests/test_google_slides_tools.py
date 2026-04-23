@@ -60,9 +60,7 @@ class TestReadPresentation:
                     "slide_number": 1,
                     "slide_id": "s1",
                     "layout": "TITLE",
-                    "shapes": [
-                        {"shape_id": "sh1", "type": "TITLE", "text": "Hello"}
-                    ],
+                    "shapes": [{"shape_id": "sh1", "type": "TITLE", "text": "Hello"}],
                     "speaker_notes": "My notes",
                 }
             ],
@@ -149,9 +147,7 @@ class TestUpdateSlideText:
 
     def test_invalid_shape_id(self):
         svc = _mock_service()
-        result = json.loads(
-            _update_slide_text(svc, "pres1234567", "s1", "", "text")
-        )
+        result = json.loads(_update_slide_text(svc, "pres1234567", "s1", "", "text"))
         assert result["code"] == "VALIDATION_ERROR"
 
 
@@ -194,9 +190,7 @@ class TestUpdateSpeakerNotes:
             "slide_id": "s1",
             "status": "updated",
         }
-        result = json.loads(
-            _update_speaker_notes(svc, "pres1234567", "s1", "My notes")
-        )
+        result = json.loads(_update_speaker_notes(svc, "pres1234567", "s1", "My notes"))
         assert result["status"] == "updated"
 
 
@@ -256,9 +250,7 @@ class TestConvertMarkdownToSlides:
 
     def test_empty_title(self):
         svc = _mock_service()
-        result = json.loads(
-            _convert_markdown_to_slides(svc, "# Content", "")
-        )
+        result = json.loads(_convert_markdown_to_slides(svc, "# Content", ""))
         assert result["code"] == "VALIDATION_ERROR"
 
 
@@ -354,17 +346,13 @@ class TestToolsApiErrorPaths:
     def test_update_slide_text_api_error(self):
         svc = _mock_service()
         svc.update_slide_text.side_effect = self._http_error()
-        result = json.loads(
-            _update_slide_text(svc, "pres1234567", "s1", "sh1", "text")
-        )
+        result = json.loads(_update_slide_text(svc, "pres1234567", "s1", "sh1", "text"))
         assert result["code"] == "API_ERROR"
 
     def test_update_speaker_notes_api_error(self):
         svc = _mock_service()
         svc.update_speaker_notes.side_effect = self._http_error()
-        result = json.loads(
-            _update_speaker_notes(svc, "pres1234567", "s1", "notes")
-        )
+        result = json.loads(_update_speaker_notes(svc, "pres1234567", "s1", "notes"))
         assert result["code"] == "API_ERROR"
 
     def test_duplicate_slide_api_error(self):
@@ -390,9 +378,7 @@ class TestToolsApiErrorPaths:
     def test_update_speaker_notes_value_error(self):
         svc = _mock_service()
         svc.update_speaker_notes.side_effect = ValueError("no notes shape")
-        result = json.loads(
-            _update_speaker_notes(svc, "pres1234567", "s1", "notes")
-        )
+        result = json.loads(_update_speaker_notes(svc, "pres1234567", "s1", "notes"))
         assert result["code"] == "VALIDATION_ERROR"
 
 

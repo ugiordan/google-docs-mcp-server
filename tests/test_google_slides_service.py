@@ -21,7 +21,11 @@ class TestListPresentations:
         svc, _, mock_drive = _make_service()
         mock_drive.files().list().execute.return_value = {
             "files": [
-                {"id": "abc123", "name": "Test Pres", "modifiedTime": "2026-01-01T00:00:00Z"}
+                {
+                    "id": "abc123",
+                    "name": "Test Pres",
+                    "modifiedTime": "2026-01-01T00:00:00Z",
+                }
             ]
         }
         result = svc.list_presentations()
@@ -56,7 +60,11 @@ class TestReadPresentation:
                                     "shape": {
                                         "text": {
                                             "textElements": [
-                                                {"textRun": {"content": "Speaker note text"}}
+                                                {
+                                                    "textRun": {
+                                                        "content": "Speaker note text"
+                                                    }
+                                                }
                                             ]
                                         }
                                     },
@@ -150,7 +158,10 @@ class TestUpdateSlideText:
                                                 "content": "Old text",
                                                 "style": {
                                                     "fontFamily": "Arial",
-                                                    "fontSize": {"magnitude": 18, "unit": "PT"},
+                                                    "fontSize": {
+                                                        "magnitude": 18,
+                                                        "unit": "PT",
+                                                    },
                                                 },
                                             }
                                         }
@@ -184,9 +195,16 @@ class TestUpdateSlideText:
                                                 "content": "Styled",
                                                 "style": {
                                                     "fontFamily": "Roboto",
-                                                    "fontSize": {"magnitude": 24, "unit": "PT"},
+                                                    "fontSize": {
+                                                        "magnitude": 24,
+                                                        "unit": "PT",
+                                                    },
                                                     "bold": True,
-                                                    "foregroundColor": {"opaqueColor": {"rgbColor": {"red": 1.0}}},
+                                                    "foregroundColor": {
+                                                        "opaqueColor": {
+                                                            "rgbColor": {"red": 1.0}
+                                                        }
+                                                    },
                                                 },
                                             }
                                         }
@@ -316,7 +334,10 @@ class TestReadPresentationEdgeCases:
                     "objectId": "s1",
                     "slideProperties": {},
                     "pageElements": [
-                        {"objectId": "img1", "image": {"sourceUrl": "https://example.com/img.png"}},
+                        {
+                            "objectId": "img1",
+                            "image": {"sourceUrl": "https://example.com/img.png"},
+                        },
                         {"objectId": "tbl1", "table": {"rows": 2, "columns": 2}},
                     ],
                 }
@@ -361,9 +382,7 @@ class TestUpdateSpeakerNotesEdgeCases:
                 {
                     "objectId": "other_slide",
                     "slideProperties": {
-                        "notesPage": {
-                            "notesProperties": {"speakerNotesObjectId": "n1"}
-                        }
+                        "notesPage": {"notesProperties": {"speakerNotesObjectId": "n1"}}
                     },
                 }
             ]
@@ -506,13 +525,12 @@ class TestConvertMarkdownToSlides:
             {"slides": []},
         ]
 
-        mock_slides.presentations().batchUpdate().execute.return_value = {
-            "replies": []
-        }
+        mock_slides.presentations().batchUpdate().execute.return_value = {"replies": []}
 
         result = svc.convert_markdown_to_slides(
-            "In Folder", [{"title": "S1", "body_text": "B", "speaker_notes": ""}],
-            folder_id="folder123"
+            "In Folder",
+            [{"title": "S1", "body_text": "B", "speaker_notes": ""}],
+            folder_id="folder123",
         )
         assert result["id"] == "p1"
 
@@ -535,9 +553,14 @@ class TestReadShapeStyle:
                                                 "content": "Hello",
                                                 "style": {
                                                     "fontFamily": "Roboto",
-                                                    "fontSize": {"magnitude": 14, "unit": "PT"},
+                                                    "fontSize": {
+                                                        "magnitude": 14,
+                                                        "unit": "PT",
+                                                    },
                                                     "bold": False,
-                                                    "link": {"url": "https://example.com"},
+                                                    "link": {
+                                                        "url": "https://example.com"
+                                                    },
                                                 },
                                             }
                                         }
@@ -576,7 +599,9 @@ class TestReadShapeStyle:
                     "pageElements": [
                         {
                             "objectId": "sh1",
-                            "shape": {"text": {"textElements": [{"paragraphMarker": {}}]}},
+                            "shape": {
+                                "text": {"textElements": [{"paragraphMarker": {}}]}
+                            },
                         }
                     ],
                 }
@@ -595,7 +620,12 @@ class TestExtractText:
         assert GoogleSlidesService._extract_text({}) == ""
 
     def test_no_text_runs(self):
-        assert GoogleSlidesService._extract_text({"textElements": [{"paragraphMarker": {}}]}) == ""
+        assert (
+            GoogleSlidesService._extract_text(
+                {"textElements": [{"paragraphMarker": {}}]}
+            )
+            == ""
+        )
 
     def test_multiple_runs(self):
         text_obj = {

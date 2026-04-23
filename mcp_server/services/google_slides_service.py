@@ -81,9 +81,7 @@ class GoogleSlidesService:
                     .get("speakerNotesObjectId")
                 )
                 if notes_id:
-                    notes_page = slide.get("slideProperties", {}).get(
-                        "notesPage", {}
-                    )
+                    notes_page = slide.get("slideProperties", {}).get("notesPage", {})
                     for element in notes_page.get("pageElements", []):
                         if element.get("objectId") == notes_id:
                             slide_data["speaker_notes"] = self._extract_text(
@@ -112,9 +110,7 @@ class GoogleSlidesService:
                 body["parents"] = [folder_id]
 
             file_metadata = (
-                self.drive_service.files()
-                .create(body=body, fields="id,name")
-                .execute()
+                self.drive_service.files().create(body=body, fields="id,name").execute()
             )
 
             return {
@@ -167,9 +163,7 @@ class GoogleSlidesService:
 
     def update_slide_text(self, presentation_id, slide_id, shape_id, content):
         def _update():
-            saved_style = self._read_shape_style(
-                presentation_id, slide_id, shape_id
-            )
+            saved_style = self._read_shape_style(presentation_id, slide_id, shape_id)
 
             requests = [
                 {
@@ -339,9 +333,7 @@ class GoogleSlidesService:
                 .get(presentationId=presentation_id)
                 .execute()
             )
-            default_slide_ids = [
-                s["objectId"] for s in presentation.get("slides", [])
-            ]
+            default_slide_ids = [s["objectId"] for s in presentation.get("slides", [])]
 
             requests = []
             for i, slide_data in enumerate(slide_dicts):
@@ -349,9 +341,11 @@ class GoogleSlidesService:
                     "createSlide": {
                         "insertionIndex": i,
                         "slideLayoutReference": {
-                            "predefinedLayout": "TITLE_AND_BODY"
-                            if slide_data.get("body_text")
-                            else "TITLE_ONLY"
+                            "predefinedLayout": (
+                                "TITLE_AND_BODY"
+                                if slide_data.get("body_text")
+                                else "TITLE_ONLY"
+                            )
                         },
                     }
                 }
@@ -395,9 +389,7 @@ class GoogleSlidesService:
 
                     for element in slide.get("pageElements", []):
                         shape = element.get("shape", {})
-                        placeholder_type = (
-                            shape.get("placeholder", {}).get("type", "")
-                        )
+                        placeholder_type = shape.get("placeholder", {}).get("type", "")
                         obj_id = element["objectId"]
 
                         if placeholder_type == "TITLE" and slide_data.get("title"):
@@ -410,9 +402,7 @@ class GoogleSlidesService:
                                     }
                                 }
                             )
-                        elif placeholder_type == "BODY" and slide_data.get(
-                            "body_text"
-                        ):
+                        elif placeholder_type == "BODY" and slide_data.get("body_text"):
                             text_requests.append(
                                 {
                                     "insertText": {
@@ -448,8 +438,7 @@ class GoogleSlidesService:
 
             if default_slide_ids:
                 delete_requests = [
-                    {"deleteObject": {"objectId": sid}}
-                    for sid in default_slide_ids
+                    {"deleteObject": {"objectId": sid}} for sid in default_slide_ids
                 ]
                 self.slides_service.presentations().batchUpdate(
                     presentationId=presentation_id,
@@ -489,9 +478,7 @@ class GoogleSlidesService:
                 if element.get("objectId") != shape_id:
                     continue
                 text_elements = (
-                    element.get("shape", {})
-                    .get("text", {})
-                    .get("textElements", [])
+                    element.get("shape", {}).get("text", {}).get("textElements", [])
                 )
                 for te in text_elements:
                     style = te.get("textRun", {}).get("style", {})
@@ -513,7 +500,5 @@ class GoogleSlidesService:
 
     @staticmethod
     def _get_layout_name(slide):
-        layout_ref = slide.get("slideProperties", {}).get(
-            "layoutObjectId", ""
-        )
+        layout_ref = slide.get("slideProperties", {}).get("layoutObjectId", "")
         return layout_ref

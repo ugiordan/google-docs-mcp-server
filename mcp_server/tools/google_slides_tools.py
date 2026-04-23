@@ -62,9 +62,7 @@ def _list_presentations(
         return _handle_api_error(e, "list_presentations")
 
 
-def _read_presentation(
-    service: GoogleSlidesService, presentation_id: str
-) -> str:
+def _read_presentation(service: GoogleSlidesService, presentation_id: str) -> str:
     try:
         validate_presentation_id(presentation_id)
         result = service.read_presentation(presentation_id)
@@ -90,7 +88,7 @@ def _read_presentation(
                 f"<slide-content-{slide_boundary}>\n"
                 f"Shapes:\n"
                 + "\n".join(shapes_text)
-                + f"\nSpeaker notes: \"{notes_text}\"\n"
+                + f'\nSpeaker notes: "{notes_text}"\n'
                 f"</slide-content-{slide_boundary}>"
             )
             slides_text.append(slide_content)
@@ -121,9 +119,7 @@ def _create_presentation(
         validate_title(title)
         if folder_id:
             validate_folder_id(folder_id)
-        result = service.create_presentation(
-            title, folder_id=folder_id or None
-        )
+        result = service.create_presentation(title, folder_id=folder_id or None)
         result["name"] = _tag_untrusted(result["name"])
         logger.info("create_presentation: %s", result["id"])
         return json.dumps(result)
@@ -145,9 +141,7 @@ def _add_slide(
             pos = position
         else:
             pos = None
-        result = service.add_slide(
-            presentation_id, position=pos, layout=layout or None
-        )
+        result = service.add_slide(presentation_id, position=pos, layout=layout or None)
         logger.info("add_slide: %s slide=%s", presentation_id, result["slide_id"])
         return json.dumps(result)
     except ValueError as e:
@@ -185,9 +179,7 @@ def _update_slide_text(
         validate_slide_id(slide_id)
         validate_shape_id(shape_id)
         validate_content_size(content)
-        result = service.update_slide_text(
-            presentation_id, slide_id, shape_id, content
-        )
+        result = service.update_slide_text(presentation_id, slide_id, shape_id, content)
         logger.info(
             "update_slide_text: %s slide=%s shape=%s",
             presentation_id,
@@ -210,9 +202,7 @@ def _delete_shape(
         validate_presentation_id(presentation_id)
         validate_shape_id(shape_id)
         result = service.delete_shape(presentation_id, shape_id)
-        logger.info(
-            "delete_shape: %s shape=%s", presentation_id, shape_id
-        )
+        logger.info("delete_shape: %s shape=%s", presentation_id, shape_id)
         return json.dumps(result)
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
@@ -231,9 +221,7 @@ def _update_speaker_notes(
         validate_slide_id(slide_id)
         validate_content_size(notes)
         result = service.update_speaker_notes(presentation_id, slide_id, notes)
-        logger.info(
-            "update_speaker_notes: %s slide=%s", presentation_id, slide_id
-        )
+        logger.info("update_speaker_notes: %s slide=%s", presentation_id, slide_id)
         return json.dumps(result)
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
@@ -279,9 +267,7 @@ def _reorder_slides(
         for sid in ids:
             validate_slide_id(sid)
         if position < 0:
-            return _error_response(
-                "position must be >= 0", "VALIDATION_ERROR"
-            )
+            return _error_response("position must be >= 0", "VALIDATION_ERROR")
         result = service.reorder_slides(presentation_id, ids, position)
         logger.info(
             "reorder_slides: %s %d slides to position %d",
@@ -347,9 +333,7 @@ def register_google_slides_tools(mcp, service: GoogleSlidesService):
         return _create_presentation(service, title, folder_id)
 
     @mcp.tool()
-    def add_slide(
-        presentation_id: str, position: int = -1, layout: str = ""
-    ) -> str:
+    def add_slide(presentation_id: str, position: int = -1, layout: str = "") -> str:
         """Add a slide to a presentation. Position is 0-indexed. Layout is a predefined layout name (e.g. TITLE_AND_BODY, BLANK)."""
         return _add_slide(service, presentation_id, position, layout)
 
@@ -363,9 +347,7 @@ def register_google_slides_tools(mcp, service: GoogleSlidesService):
         presentation_id: str, slide_id: str, shape_id: str, content: str
     ) -> str:
         """Replace text in a specific shape on a slide. Use read_presentation to find shape IDs. Preserves the shape's original font family, size, color, and style."""
-        return _update_slide_text(
-            service, presentation_id, slide_id, shape_id, content
-        )
+        return _update_slide_text(service, presentation_id, slide_id, shape_id, content)
 
     @mcp.tool()
     def delete_shape(presentation_id: str, shape_id: str) -> str:
@@ -373,25 +355,17 @@ def register_google_slides_tools(mcp, service: GoogleSlidesService):
         return _delete_shape(service, presentation_id, shape_id)
 
     @mcp.tool()
-    def update_speaker_notes(
-        presentation_id: str, slide_id: str, notes: str
-    ) -> str:
+    def update_speaker_notes(presentation_id: str, slide_id: str, notes: str) -> str:
         """Set speaker notes for a slide."""
-        return _update_speaker_notes(
-            service, presentation_id, slide_id, notes
-        )
+        return _update_speaker_notes(service, presentation_id, slide_id, notes)
 
     @mcp.tool()
-    def duplicate_slide(
-        presentation_id: str, slide_id: str, position: int = -1
-    ) -> str:
+    def duplicate_slide(presentation_id: str, slide_id: str, position: int = -1) -> str:
         """Copy a slide within the presentation. Optionally specify position (0-indexed)."""
         return _duplicate_slide(service, presentation_id, slide_id, position)
 
     @mcp.tool()
-    def reorder_slides(
-        presentation_id: str, slide_ids: str, position: int
-    ) -> str:
+    def reorder_slides(presentation_id: str, slide_ids: str, position: int) -> str:
         """Move slides to a new position. slide_ids is comma-separated. Position is 0-indexed."""
         return _reorder_slides(service, presentation_id, slide_ids, position)
 
@@ -400,6 +374,4 @@ def register_google_slides_tools(mcp, service: GoogleSlidesService):
         markdown_content: str, title: str, folder_id: str = ""
     ) -> str:
         """Convert markdown to a Google Slides presentation. Slides are separated by --- (horizontal rules). First # heading becomes slide title. Speaker notes use :::notes blocks."""
-        return _convert_markdown_to_slides(
-            service, markdown_content, title, folder_id
-        )
+        return _convert_markdown_to_slides(service, markdown_content, title, folder_id)

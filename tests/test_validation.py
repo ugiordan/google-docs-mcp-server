@@ -167,7 +167,9 @@ class TestValidateMimeType:
 
 class TestValidatePresentationId:
     def test_valid_id(self):
-        assert validate_presentation_id("1aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ABC") is True
+        assert (
+            validate_presentation_id("1aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ABC") is True
+        )
 
     def test_rejects_empty(self):
         with pytest.raises(ValueError, match="Presentation ID cannot be empty"):
