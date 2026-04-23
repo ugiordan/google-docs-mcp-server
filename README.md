@@ -57,7 +57,7 @@ Add to your Claude Code configuration (`~/.claude.json`):
 }
 ```
 
-Restart Claude Code. The `google-docs` MCP server should appear with 18 available tools.
+Restart Claude Code. The `google-docs` MCP server should appear with 29 available tools.
 
 ### Building from source
 
@@ -150,9 +150,9 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `read_presentation` | Read all slide content: text, speaker notes, shape IDs, layout info | `presentation_id` (str) |
 | `create_presentation` | Create a new presentation | `title` (str), `folder_id` (str, optional) |
 | `add_slide` | Add a slide at a position with optional layout | `presentation_id` (str), `position` (int, optional), `layout` (str, optional) |
-| `delete_slide` | Delete a slide | `presentation_id` (str), `slide_id` (str) |
+| `delete_slide` | Delete a slide (two-step nonce confirmation) | `presentation_id` (str), `slide_id` (str), `nonce` (str, required on second call) |
 | `update_slide_text` | Replace text in a shape, preserving font/size/color | `presentation_id` (str), `slide_id` (str), `shape_id` (str), `content` (str) |
-| `delete_shape` | Delete a shape, image, or element from a slide | `presentation_id` (str), `shape_id` (str) |
+| `delete_shape` | Delete a shape, image, or element from a slide (two-step nonce confirmation) | `presentation_id` (str), `shape_id` (str), `nonce` (str, required on second call) |
 | `update_speaker_notes` | Set speaker notes for a slide | `presentation_id` (str), `slide_id` (str), `notes` (str) |
 | `duplicate_slide` | Copy a slide within a presentation | `presentation_id` (str), `slide_id` (str), `position` (int, optional) |
 | `reorder_slides` | Move slides to new positions | `presentation_id` (str), `slide_ids` (str, comma-separated), `position` (int) |
@@ -160,7 +160,7 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 
 ### Delete confirmation
 
-`delete_document` requires two calls. The first call returns a cryptographic nonce (valid for 30 seconds). The second call must include the nonce to confirm. Nonces are single-use, document-specific, and stored in-memory. Documents are moved to trash, not permanently deleted.
+`delete_document`, `delete_slide`, and `delete_shape` require two calls. The first call returns a cryptographic nonce (valid for 30 seconds). The second call must include the nonce to confirm. Nonces are single-use, resource-specific, and stored in-memory. Documents are moved to trash, not permanently deleted. Slides and shapes are deleted immediately on confirmation.
 
 ### Tabs
 
@@ -276,7 +276,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (460 unit tests)
+# Run tests (485 unit tests)
 uv run pytest -v
 
 # Lint and format

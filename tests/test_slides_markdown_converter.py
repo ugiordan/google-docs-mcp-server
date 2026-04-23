@@ -58,10 +58,11 @@ class TestSplitSlides:
         assert len(result) == 1
         assert "---" in result[0]
 
-    def test_tilde_fences_not_treated_as_code(self):
+    def test_tilde_fences_treated_as_code(self):
         md = "# Slide 1\n~~~\ncode\n---\nmore\n~~~\n---\n# Slide 2"
         result = split_slides(md)
-        assert len(result) == 3
+        assert len(result) == 2
+        assert "---" in result[0]
 
     def test_whitespace_only_chunks_skipped(self):
         md = "---\n   \n\n---\n# Real Slide"

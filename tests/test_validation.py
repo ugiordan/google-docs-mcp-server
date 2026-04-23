@@ -7,6 +7,7 @@ from mcp_server.validation import (
     validate_content_size,
     validate_document_id,
     validate_folder_id,
+    validate_layout,
     validate_mime_type,
     validate_presentation_id,
     validate_shape_id,
@@ -249,3 +250,26 @@ class TestValidateShapeId:
     def test_rejects_special_chars(self):
         with pytest.raises(ValueError, match="Invalid shape ID"):
             validate_shape_id("shape!@#")
+
+
+class TestValidateLayout:
+    def test_valid_blank(self):
+        assert validate_layout("BLANK") is True
+
+    def test_valid_title_and_body(self):
+        assert validate_layout("TITLE_AND_BODY") is True
+
+    def test_valid_section_header(self):
+        assert validate_layout("SECTION_HEADER") is True
+
+    def test_rejects_invalid(self):
+        with pytest.raises(ValueError, match="Invalid layout"):
+            validate_layout("INVALID_LAYOUT")
+
+    def test_rejects_lowercase(self):
+        with pytest.raises(ValueError, match="Invalid layout"):
+            validate_layout("blank")
+
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError, match="Invalid layout"):
+            validate_layout("")

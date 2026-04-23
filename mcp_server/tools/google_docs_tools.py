@@ -6,8 +6,6 @@ import logging
 import os
 import secrets
 
-from googleapiclient.errors import HttpError
-
 from mcp_server.config import TemplateConfig
 from mcp_server.nonce import NonceManager
 from mcp_server.services.batch_style_writer import blocks_to_batch_requests
@@ -17,6 +15,7 @@ from mcp_server.services.markdown_converter import (
     extract_template_styles,
     parse_markdown,
 )
+from mcp_server.tools.common import error_response, handle_api_error, tag_untrusted
 from mcp_server.validation import (
     MAX_CONTENT_BYTES,
     MAX_MARKDOWN_BYTES,
@@ -34,27 +33,9 @@ from mcp_server.validation import (
 
 logger = logging.getLogger("google-docs-mcp")
 
-
-def _tag_untrusted(data: str) -> str:
-    """Wrap untrusted external data in random boundary tags."""
-    boundary = secrets.token_hex(8)
-    return f"<untrusted-data-{boundary}>{data}</untrusted-data-{boundary}>"
-
-
-def _error_response(message: str, code: str) -> str:
-    """Format an error response as JSON."""
-    return json.dumps({"error": message, "code": code})
-
-
-def _handle_api_error(e: Exception, operation: str) -> str:
-    """Handle API errors, returning appropriate error responses."""
-    logger.error("%s error: %s", operation, e)
-    if isinstance(e, HttpError) and e.resp.status == 401:
-        return _error_response(
-            "Authentication expired. Please re-run the --auth flow.",
-            "REAUTH_REQUIRED",
-        )
-    return _error_response("An internal error occurred", "API_ERROR")
+_tag_untrusted = tag_untrusted
+_error_response = error_response
+_handle_api_error = handle_api_error
 
 
 def _list_documents(

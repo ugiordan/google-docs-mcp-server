@@ -74,7 +74,7 @@ def create_server() -> FastMCP:
     if service:
         slides_service = GoogleSlidesService(creds)
         register_google_docs_tools(mcp, service, nonce_manager, template_config)
-        register_google_slides_tools(mcp, slides_service)
+        register_google_slides_tools(mcp, slides_service, nonce_manager)
     else:
         # Register a single tool that tells the user to authenticate
         @mcp.tool()

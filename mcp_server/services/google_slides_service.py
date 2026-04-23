@@ -51,28 +51,40 @@ class GoogleSlidesService:
                 .execute()
             )
 
+            layout_map = {}
+            for layout in response.get("layouts", []):
+                layout_map[layout["objectId"]] = layout.get("layoutProperties", {}).get(
+                    "displayName", layout["objectId"]
+                )
+
             slides = []
             for i, slide in enumerate(response.get("slides", [])):
                 slide_data = {
                     "slide_number": i + 1,
                     "slide_id": slide["objectId"],
-                    "layout": self._get_layout_name(slide),
-                    "shapes": [],
+                    "layout": self._get_layout_name(slide, layout_map),
+                    "elements": [],
                     "speaker_notes": "",
                 }
 
                 for element in slide.get("pageElements", []):
+                    el_data = {
+                        "element_id": element["objectId"],
+                        "type": self._get_element_type(element),
+                        "text": "",
+                    }
                     if "shape" in element:
                         shape = element["shape"]
-                        shape_type = shape.get("placeholder", {}).get("type", "NONE")
-                        text = self._extract_text(shape.get("text", {}))
-                        slide_data["shapes"].append(
-                            {
-                                "shape_id": element["objectId"],
-                                "type": shape_type,
-                                "text": text,
-                            }
+                        placeholder = shape.get("placeholder", {}).get("type")
+                        if placeholder:
+                            el_data["type"] = placeholder
+                        el_data["text"] = self._extract_text(shape.get("text", {}))
+                    elif "table" in element:
+                        table = element["table"]
+                        el_data["text"] = (
+                            f"{table.get('rows', 0)}x{table.get('columns', 0)} table"
                         )
+                    slide_data["elements"].append(el_data)
 
                 notes_id = (
                     slide.get("slideProperties", {})
@@ -134,7 +146,8 @@ class GoogleSlidesService:
             response = (
                 self.slides_service.presentations()
                 .batchUpdate(
-                    presentationId=presentation_id, body={"requests": [request]}
+                    presentationId=presentation_id,
+                    body={"requests": [request]},
                 )
                 .execute()
             )
@@ -222,9 +235,13 @@ class GoogleSlidesService:
 
     def update_speaker_notes(self, presentation_id, slide_id, notes):
         def _update():
+            _fields = (
+                "slides.objectId,"
+                "slides.slideProperties.notesPage.notesProperties.speakerNotesObjectId"
+            )
             presentation = (
                 self.slides_service.presentations()
-                .get(presentationId=presentation_id)
+                .get(presentationId=presentation_id, fields=_fields)
                 .execute()
             )
 
@@ -271,19 +288,23 @@ class GoogleSlidesService:
         return retry_on_429(_update)
 
     def duplicate_slide(self, presentation_id, slide_id, position=None):
-        def _duplicate():
+        def _dup():
             request = {"duplicateObject": {"objectId": slide_id}}
             response = (
                 self.slides_service.presentations()
                 .batchUpdate(
-                    presentationId=presentation_id, body={"requests": [request]}
+                    presentationId=presentation_id,
+                    body={"requests": [request]},
                 )
                 .execute()
             )
+            return response["replies"][0]["duplicateObject"]["objectId"]
 
-            new_slide_id = response["replies"][0]["duplicateObject"]["objectId"]
+        new_slide_id = retry_on_429(_dup)
 
-            if position is not None:
+        if position is not None:
+
+            def _move():
                 move_request = {
                     "updateSlidesPosition": {
                         "slideObjectIds": [new_slide_id],
@@ -295,13 +316,13 @@ class GoogleSlidesService:
                     body={"requests": [move_request]},
                 ).execute()
 
-            return {
-                "presentation_id": presentation_id,
-                "original_slide_id": slide_id,
-                "new_slide_id": new_slide_id,
-            }
+            retry_on_429(_move)
 
-        return retry_on_429(_duplicate)
+        return {
+            "presentation_id": presentation_id,
+            "original_slide_id": slide_id,
+            "new_slide_id": new_slide_id,
+        }
 
     def reorder_slides(self, presentation_id, slide_ids, position):
         def _reorder():
@@ -324,12 +345,12 @@ class GoogleSlidesService:
         return retry_on_429(_reorder)
 
     def convert_markdown_to_slides(self, title, slide_dicts, folder_id=None):
-        def _convert():
-            result = self.create_presentation(title, folder_id)
-            presentation_id = result["id"]
+        result = self.create_presentation(title, folder_id)
+        presentation_id = result["id"]
 
-            presentation = (
-                self.slides_service.presentations()
+        try:
+            presentation = retry_on_429(
+                lambda: self.slides_service.presentations()
                 .get(presentationId=presentation_id)
                 .execute()
             )
@@ -352,8 +373,8 @@ class GoogleSlidesService:
                 requests.append(create_req)
 
             if requests:
-                response = (
-                    self.slides_service.presentations()
+                response = retry_on_429(
+                    lambda: self.slides_service.presentations()
                     .batchUpdate(
                         presentationId=presentation_id,
                         body={"requests": requests},
@@ -367,21 +388,21 @@ class GoogleSlidesService:
                     if "createSlide" in r
                 ]
 
-                presentation = (
-                    self.slides_service.presentations()
+                presentation = retry_on_429(
+                    lambda: self.slides_service.presentations()
                     .get(presentationId=presentation_id)
                     .execute()
                 )
 
                 text_requests = []
-                for idx, slide_data in enumerate(slide_dicts):
+                for idx, sd in enumerate(slide_dicts):
                     if idx >= len(new_slide_ids):
                         break
-                    slide_id = new_slide_ids[idx]
+                    s_id = new_slide_ids[idx]
 
                     slide = None
                     for s in presentation.get("slides", []):
-                        if s["objectId"] == slide_id:
+                        if s["objectId"] == s_id:
                             slide = s
                             break
                     if not slide:
@@ -392,23 +413,23 @@ class GoogleSlidesService:
                         placeholder_type = shape.get("placeholder", {}).get("type", "")
                         obj_id = element["objectId"]
 
-                        if placeholder_type == "TITLE" and slide_data.get("title"):
+                        if placeholder_type == "TITLE" and sd.get("title"):
                             text_requests.append(
                                 {
                                     "insertText": {
                                         "objectId": obj_id,
                                         "insertionIndex": 0,
-                                        "text": slide_data["title"],
+                                        "text": sd["title"],
                                     }
                                 }
                             )
-                        elif placeholder_type == "BODY" and slide_data.get("body_text"):
+                        elif placeholder_type == "BODY" and sd.get("body_text"):
                             text_requests.append(
                                 {
                                     "insertText": {
                                         "objectId": obj_id,
                                         "insertionIndex": 0,
-                                        "text": slide_data["body_text"],
+                                        "text": sd["body_text"],
                                     }
                                 }
                             )
@@ -419,40 +440,51 @@ class GoogleSlidesService:
                         .get("notesProperties", {})
                         .get("speakerNotesObjectId")
                     )
-                    if notes_shape_id and slide_data.get("speaker_notes"):
+                    if notes_shape_id and sd.get("speaker_notes"):
                         text_requests.append(
                             {
                                 "insertText": {
                                     "objectId": notes_shape_id,
                                     "insertionIndex": 0,
-                                    "text": slide_data["speaker_notes"],
+                                    "text": sd["speaker_notes"],
                                 }
                             }
                         )
 
                 if text_requests:
-                    self.slides_service.presentations().batchUpdate(
-                        presentationId=presentation_id,
-                        body={"requests": text_requests},
-                    ).execute()
+                    retry_on_429(
+                        lambda: self.slides_service.presentations()
+                        .batchUpdate(
+                            presentationId=presentation_id,
+                            body={"requests": text_requests},
+                        )
+                        .execute()
+                    )
 
             if default_slide_ids:
                 delete_requests = [
                     {"deleteObject": {"objectId": sid}} for sid in default_slide_ids
                 ]
-                self.slides_service.presentations().batchUpdate(
-                    presentationId=presentation_id,
-                    body={"requests": delete_requests},
-                ).execute()
+                retry_on_429(
+                    lambda: self.slides_service.presentations()
+                    .batchUpdate(
+                        presentationId=presentation_id,
+                        body={"requests": delete_requests},
+                    )
+                    .execute()
+                )
+        except Exception:
+            raise ValueError(
+                f"Failed to populate presentation. "
+                f"Partial presentation created with ID: {presentation_id}"
+            ) from None
 
-            return {
-                "id": presentation_id,
-                "name": title,
-                "url": f"https://docs.google.com/presentation/d/{presentation_id}/edit",
-                "slide_count": len(slide_dicts),
-            }
-
-        return retry_on_429(_convert)
+        return {
+            "id": presentation_id,
+            "name": title,
+            "url": f"https://docs.google.com/presentation/d/{presentation_id}/edit",
+            "slide_count": len(slide_dicts),
+        }
 
     _STYLE_FIELDS = [
         "fontFamily",
@@ -466,9 +498,10 @@ class GoogleSlidesService:
     ]
 
     def _read_shape_style(self, presentation_id, slide_id, shape_id):
+        _fields = "slides.objectId,slides.pageElements.objectId,slides.pageElements.shape.text"
         presentation = (
             self.slides_service.presentations()
-            .get(presentationId=presentation_id)
+            .get(presentationId=presentation_id, fields=_fields)
             .execute()
         )
         for slide in presentation.get("slides", []):
@@ -496,9 +529,34 @@ class GoogleSlidesService:
         for element in text_obj.get("textElements", []):
             if "textRun" in element:
                 parts.append(element["textRun"].get("content", ""))
-        return "".join(parts).strip()
+        text = "".join(parts)
+        if text.endswith("\n"):
+            text = text[:-1]
+        return text
 
     @staticmethod
-    def _get_layout_name(slide):
-        layout_ref = slide.get("slideProperties", {}).get("layoutObjectId", "")
-        return layout_ref
+    def _get_element_type(element):
+        if "shape" in element:
+            return "SHAPE"
+        if "image" in element:
+            return "IMAGE"
+        if "table" in element:
+            return "TABLE"
+        if "line" in element:
+            return "LINE"
+        if "video" in element:
+            return "VIDEO"
+        if "sheetsChart" in element:
+            return "CHART"
+        if "wordArt" in element:
+            return "WORD_ART"
+        if "group" in element:
+            return "GROUP"
+        return "UNKNOWN"
+
+    @staticmethod
+    def _get_layout_name(slide, layout_map=None):
+        layout_id = slide.get("slideProperties", {}).get("layoutObjectId", "")
+        if layout_map and layout_id in layout_map:
+            return layout_map[layout_id]
+        return layout_id

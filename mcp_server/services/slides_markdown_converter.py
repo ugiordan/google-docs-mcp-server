@@ -15,7 +15,7 @@ def split_slides(markdown: str) -> list[str]:
     for line in markdown.split("\n"):
         stripped = line.strip()
 
-        if stripped.startswith("```"):
+        if stripped.startswith("```") or stripped.startswith("~~~"):
             in_code_block = not in_code_block
 
         if not in_code_block and re.match(r"^-{3,}\s*$", stripped):

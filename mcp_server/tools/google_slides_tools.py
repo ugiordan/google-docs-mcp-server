@@ -2,16 +2,16 @@
 
 import json
 import logging
-import secrets
 
-from googleapiclient.errors import HttpError
-
+from mcp_server.nonce import NonceManager
 from mcp_server.services.google_slides_service import GoogleSlidesService
 from mcp_server.services.slides_markdown_converter import markdown_to_slide_dicts
+from mcp_server.tools.common import error_response, handle_api_error, tag_untrusted
 from mcp_server.validation import (
     MAX_MARKDOWN_BYTES,
     validate_content_size,
     validate_folder_id,
+    validate_layout,
     validate_presentation_id,
     validate_shape_id,
     validate_slide_id,
@@ -20,24 +20,9 @@ from mcp_server.validation import (
 
 logger = logging.getLogger("google-docs-mcp")
 
-
-def _tag_untrusted(data: str) -> str:
-    boundary = secrets.token_hex(8)
-    return f"<untrusted-data-{boundary}>{data}</untrusted-data-{boundary}>"
-
-
-def _error_response(message: str, code: str) -> str:
-    return json.dumps({"error": message, "code": code})
-
-
-def _handle_api_error(e: Exception, operation: str) -> str:
-    logger.error("%s error: %s", operation, e)
-    if isinstance(e, HttpError) and e.resp.status == 401:
-        return _error_response(
-            "Authentication expired. Please re-run the --auth flow.",
-            "REAUTH_REQUIRED",
-        )
-    return _error_response("An internal error occurred", "API_ERROR")
+_tag_untrusted = tag_untrusted
+_error_response = error_response
+_handle_api_error = handle_api_error
 
 
 def _list_presentations(
@@ -56,8 +41,6 @@ def _list_presentations(
                 pres["name"] = _tag_untrusted(pres["name"])
         logger.info("list_presentations: found %d presentations", len(result))
         return json.dumps(result)
-    except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
         return _handle_api_error(e, "list_presentations")
 
@@ -68,17 +51,20 @@ def _read_presentation(service: GoogleSlidesService, presentation_id: str) -> st
         result = service.read_presentation(presentation_id)
         logger.info("read_presentation: %s", presentation_id)
 
+        import secrets
+
         result["title"] = _tag_untrusted(result.get("title", ""))
 
         boundary = secrets.token_hex(8)
         slides_text = []
         for slide in result.get("slides", []):
             slide_boundary = secrets.token_hex(8)
-            shapes_text = []
-            for shape in slide.get("shapes", []):
-                shape_text = _tag_untrusted(shape.get("text", ""))
-                shapes_text.append(
-                    f"  - {shape['shape_id']} ({shape['type']}): \"{shape_text}\""
+            elements_text = []
+            for element in slide.get("elements", []):
+                el_type = element.get("type", "UNKNOWN")
+                el_text = _tag_untrusted(element.get("text", ""))
+                elements_text.append(
+                    f'  - {element["element_id"]} ({el_type}): "{el_text}"'
                 )
             notes_text = _tag_untrusted(slide.get("speaker_notes", ""))
 
@@ -86,8 +72,8 @@ def _read_presentation(service: GoogleSlidesService, presentation_id: str) -> st
                 f"Slide {slide['slide_number']} "
                 f"(id: {slide['slide_id']}, layout: {slide['layout']})\n"
                 f"<slide-content-{slide_boundary}>\n"
-                f"Shapes:\n"
-                + "\n".join(shapes_text)
+                f"Elements:\n"
+                + "\n".join(elements_text)
                 + f'\nSpeaker notes: "{notes_text}"\n'
                 f"</slide-content-{slide_boundary}>"
             )
@@ -137,6 +123,8 @@ def _add_slide(
 ) -> str:
     try:
         validate_presentation_id(presentation_id)
+        if layout:
+            validate_layout(layout)
         if position >= 0:
             pos = position
         else:
@@ -152,15 +140,39 @@ def _add_slide(
 
 def _delete_slide(
     service: GoogleSlidesService,
+    nonce_manager: NonceManager,
     presentation_id: str,
     slide_id: str,
+    nonce: str = "",
 ) -> str:
     try:
         validate_presentation_id(presentation_id)
         validate_slide_id(slide_id)
-        result = service.delete_slide(presentation_id, slide_id)
-        logger.info("delete_slide: %s slide=%s", presentation_id, slide_id)
-        return json.dumps(result)
+        nonce_key = f"{presentation_id}:{slide_id}"
+        if not nonce:
+            new_nonce = nonce_manager.create(nonce_key)
+            logger.info(
+                "delete_slide: nonce created for %s/%s", presentation_id, slide_id
+            )
+            return json.dumps(
+                {
+                    "presentation_id": presentation_id,
+                    "slide_id": slide_id,
+                    "status": "confirm_required",
+                    "nonce": new_nonce,
+                    "expires_in_seconds": 30,
+                    "message": "Call delete_slide again with this nonce to confirm deletion.",
+                }
+            )
+        else:
+            if not nonce_manager.verify(nonce_key, nonce):
+                return _error_response(
+                    "Invalid or expired nonce. Please restart the deletion process.",
+                    "NONCE_ERROR",
+                )
+            result = service.delete_slide(presentation_id, slide_id)
+            logger.info("delete_slide: deleted %s/%s", presentation_id, slide_id)
+            return json.dumps(result)
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
@@ -195,15 +207,39 @@ def _update_slide_text(
 
 def _delete_shape(
     service: GoogleSlidesService,
+    nonce_manager: NonceManager,
     presentation_id: str,
     shape_id: str,
+    nonce: str = "",
 ) -> str:
     try:
         validate_presentation_id(presentation_id)
         validate_shape_id(shape_id)
-        result = service.delete_shape(presentation_id, shape_id)
-        logger.info("delete_shape: %s shape=%s", presentation_id, shape_id)
-        return json.dumps(result)
+        nonce_key = f"{presentation_id}:{shape_id}"
+        if not nonce:
+            new_nonce = nonce_manager.create(nonce_key)
+            logger.info(
+                "delete_shape: nonce created for %s/%s", presentation_id, shape_id
+            )
+            return json.dumps(
+                {
+                    "presentation_id": presentation_id,
+                    "shape_id": shape_id,
+                    "status": "confirm_required",
+                    "nonce": new_nonce,
+                    "expires_in_seconds": 30,
+                    "message": "Call delete_shape again with this nonce to confirm deletion.",
+                }
+            )
+        else:
+            if not nonce_manager.verify(nonce_key, nonce):
+                return _error_response(
+                    "Invalid or expired nonce. Please restart the deletion process.",
+                    "NONCE_ERROR",
+                )
+            result = service.delete_shape(presentation_id, shape_id)
+            logger.info("delete_shape: deleted %s/%s", presentation_id, shape_id)
+            return json.dumps(result)
     except ValueError as e:
         return _error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
@@ -316,7 +352,9 @@ def _convert_markdown_to_slides(
         return _handle_api_error(e, "convert_markdown_to_slides")
 
 
-def register_google_slides_tools(mcp, service: GoogleSlidesService):
+def register_google_slides_tools(
+    mcp, service: GoogleSlidesService, nonce_manager: NonceManager
+):
     @mcp.tool()
     def list_presentations(query: str = "", max_results: int = 10) -> str:
         """List Google Slides presentations. Optionally filter by query string."""
@@ -324,7 +362,7 @@ def register_google_slides_tools(mcp, service: GoogleSlidesService):
 
     @mcp.tool()
     def read_presentation(presentation_id: str) -> str:
-        """Read all slide content including text, speaker notes, shape IDs, and layout info."""
+        """Read all slide content including text, speaker notes, element IDs, and layout info."""
         return _read_presentation(service, presentation_id)
 
     @mcp.tool()
@@ -334,13 +372,13 @@ def register_google_slides_tools(mcp, service: GoogleSlidesService):
 
     @mcp.tool()
     def add_slide(presentation_id: str, position: int = -1, layout: str = "") -> str:
-        """Add a slide to a presentation. Position is 0-indexed. Layout is a predefined layout name (e.g. TITLE_AND_BODY, BLANK)."""
+        """Add a slide to a presentation. Position is 0-indexed. Layout: BLANK, TITLE, TITLE_AND_BODY, TITLE_ONLY, CAPTION_ONLY, SECTION_HEADER, etc."""
         return _add_slide(service, presentation_id, position, layout)
 
     @mcp.tool()
-    def delete_slide(presentation_id: str, slide_id: str) -> str:
-        """Delete a slide from a presentation. IMPORTANT: Always confirm with the user before deleting."""
-        return _delete_slide(service, presentation_id, slide_id)
+    def delete_slide(presentation_id: str, slide_id: str, nonce: str = "") -> str:
+        """Delete a slide from a presentation. Requires two-step nonce confirmation. IMPORTANT: Always confirm with the user before completing the second step."""
+        return _delete_slide(service, nonce_manager, presentation_id, slide_id, nonce)
 
     @mcp.tool()
     def update_slide_text(
@@ -350,9 +388,9 @@ def register_google_slides_tools(mcp, service: GoogleSlidesService):
         return _update_slide_text(service, presentation_id, slide_id, shape_id, content)
 
     @mcp.tool()
-    def delete_shape(presentation_id: str, shape_id: str) -> str:
-        """Delete a shape, image, or other element from a slide. Use read_presentation to find shape IDs. IMPORTANT: Always confirm with the user before deleting."""
-        return _delete_shape(service, presentation_id, shape_id)
+    def delete_shape(presentation_id: str, shape_id: str, nonce: str = "") -> str:
+        """Delete a shape, image, or other element from a slide. Requires two-step nonce confirmation. IMPORTANT: Always confirm with the user before completing the second step."""
+        return _delete_shape(service, nonce_manager, presentation_id, shape_id, nonce)
 
     @mcp.tool()
     def update_speaker_notes(presentation_id: str, slide_id: str, notes: str) -> str:

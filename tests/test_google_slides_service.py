@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from mcp_server.services.google_slides_service import GoogleSlidesService
 
 
@@ -40,6 +42,14 @@ class TestListPresentations:
         result = svc.list_presentations()
         assert result == []
 
+    def test_with_query(self):
+        svc, _, mock_drive = _make_service()
+        mock_drive.files().list().execute.return_value = {
+            "files": [{"id": "p1", "name": "Match", "modifiedTime": ""}]
+        }
+        result = svc.list_presentations(query="Match")
+        assert len(result) == 1
+
 
 class TestReadPresentation:
     def test_reads_slides(self):
@@ -47,6 +57,12 @@ class TestReadPresentation:
         mock_slides.presentations().get().execute.return_value = {
             "presentationId": "pres123",
             "title": "My Presentation",
+            "layouts": [
+                {
+                    "objectId": "layout1",
+                    "layoutProperties": {"displayName": "Title Slide"},
+                }
+            ],
             "slides": [
                 {
                     "objectId": "slide1",
@@ -94,9 +110,80 @@ class TestReadPresentation:
         assert result["slide_count"] == 1
         slide = result["slides"][0]
         assert slide["slide_id"] == "slide1"
-        assert slide["shapes"][0]["type"] == "TITLE"
-        assert slide["shapes"][0]["text"] == "Slide Title"
+        assert slide["layout"] == "Title Slide"
+        assert slide["elements"][0]["type"] == "TITLE"
+        assert slide["elements"][0]["text"] == "Slide Title"
         assert slide["speaker_notes"] == "Speaker note text"
+
+    def test_surfaces_non_shape_elements(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "presentationId": "pres123",
+            "title": "Mixed",
+            "slides": [
+                {
+                    "objectId": "s1",
+                    "slideProperties": {},
+                    "pageElements": [
+                        {
+                            "objectId": "img1",
+                            "image": {"sourceUrl": "https://x.com/i.png"},
+                        },
+                        {
+                            "objectId": "tbl1",
+                            "table": {"rows": 3, "columns": 2},
+                        },
+                        {"objectId": "line1", "line": {}},
+                    ],
+                }
+            ],
+        }
+        result = svc.read_presentation("pres123")
+        elements = result["slides"][0]["elements"]
+        assert len(elements) == 3
+        assert elements[0]["type"] == "IMAGE"
+        assert elements[1]["type"] == "TABLE"
+        assert elements[1]["text"] == "3x2 table"
+        assert elements[2]["type"] == "LINE"
+
+
+class TestReadPresentationEdgeCases:
+    def test_zero_slides(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "presentationId": "pres123",
+            "title": "Empty Pres",
+            "slides": [],
+        }
+        result = svc.read_presentation("pres123")
+        assert result["slide_count"] == 0
+        assert result["slides"] == []
+
+    def test_slide_without_speaker_notes_page(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "presentationId": "pres123",
+            "title": "No Notes",
+            "slides": [
+                {
+                    "objectId": "s1",
+                    "slideProperties": {},
+                    "pageElements": [],
+                }
+            ],
+        }
+        result = svc.read_presentation("pres123")
+        assert result["slides"][0]["speaker_notes"] == ""
+
+    def test_no_slides_key_in_response(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "presentationId": "pres123",
+            "title": "Weird",
+        }
+        result = svc.read_presentation("pres123")
+        assert result["slide_count"] == 0
+        assert result["slides"] == []
 
 
 class TestCreatePresentation:
@@ -294,84 +381,8 @@ class TestUpdateSpeakerNotes:
                 }
             ]
         }
-        try:
+        with pytest.raises(ValueError, match="speaker notes"):
             svc.update_speaker_notes("pres123", "slide1", "Notes")
-            assert False, "Should have raised"
-        except ValueError as e:
-            assert "speaker notes" in str(e).lower()
-
-
-class TestDuplicateSlide:
-    def test_duplicates_slide(self):
-        svc, mock_slides, _ = _make_service()
-        mock_slides.presentations().batchUpdate().execute.return_value = {
-            "replies": [{"duplicateObject": {"objectId": "slide1_copy"}}]
-        }
-        result = svc.duplicate_slide("pres123", "slide1")
-        assert result["new_slide_id"] == "slide1_copy"
-        assert result["original_slide_id"] == "slide1"
-
-
-class TestReadPresentationEdgeCases:
-    def test_zero_slides(self):
-        svc, mock_slides, _ = _make_service()
-        mock_slides.presentations().get().execute.return_value = {
-            "presentationId": "pres123",
-            "title": "Empty Pres",
-            "slides": [],
-        }
-        result = svc.read_presentation("pres123")
-        assert result["slide_count"] == 0
-        assert result["slides"] == []
-
-    def test_non_shape_elements_skipped(self):
-        svc, mock_slides, _ = _make_service()
-        mock_slides.presentations().get().execute.return_value = {
-            "presentationId": "pres123",
-            "title": "Mixed Elements",
-            "slides": [
-                {
-                    "objectId": "s1",
-                    "slideProperties": {},
-                    "pageElements": [
-                        {
-                            "objectId": "img1",
-                            "image": {"sourceUrl": "https://example.com/img.png"},
-                        },
-                        {"objectId": "tbl1", "table": {"rows": 2, "columns": 2}},
-                    ],
-                }
-            ],
-        }
-        result = svc.read_presentation("pres123")
-        assert len(result["slides"]) == 1
-        assert result["slides"][0]["shapes"] == []
-
-    def test_slide_without_speaker_notes_page(self):
-        svc, mock_slides, _ = _make_service()
-        mock_slides.presentations().get().execute.return_value = {
-            "presentationId": "pres123",
-            "title": "No Notes",
-            "slides": [
-                {
-                    "objectId": "s1",
-                    "slideProperties": {},
-                    "pageElements": [],
-                }
-            ],
-        }
-        result = svc.read_presentation("pres123")
-        assert result["slides"][0]["speaker_notes"] == ""
-
-    def test_no_slides_key_in_response(self):
-        svc, mock_slides, _ = _make_service()
-        mock_slides.presentations().get().execute.return_value = {
-            "presentationId": "pres123",
-            "title": "Weird",
-        }
-        result = svc.read_presentation("pres123")
-        assert result["slide_count"] == 0
-        assert result["slides"] == []
 
 
 class TestUpdateSpeakerNotesEdgeCases:
@@ -387,20 +398,34 @@ class TestUpdateSpeakerNotesEdgeCases:
                 }
             ]
         }
-        try:
+        with pytest.raises(ValueError, match="nonexistent_slide"):
             svc.update_speaker_notes("pres123", "nonexistent_slide", "Notes")
-            assert False, "Should have raised"
-        except ValueError as e:
-            assert "nonexistent_slide" in str(e)
 
     def test_empty_slides_list(self):
         svc, mock_slides, _ = _make_service()
         mock_slides.presentations().get().execute.return_value = {"slides": []}
-        try:
+        with pytest.raises(ValueError, match="speaker notes"):
             svc.update_speaker_notes("pres123", "slide1", "Notes")
-            assert False, "Should have raised"
-        except ValueError as e:
-            assert "speaker notes" in str(e).lower()
+
+
+class TestDuplicateSlide:
+    def test_duplicates_slide(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {
+            "replies": [{"duplicateObject": {"objectId": "slide1_copy"}}]
+        }
+        result = svc.duplicate_slide("pres123", "slide1")
+        assert result["new_slide_id"] == "slide1_copy"
+        assert result["original_slide_id"] == "slide1"
+
+    def test_duplicates_with_position(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.side_effect = [
+            {"replies": [{"duplicateObject": {"objectId": "s1_copy"}}]},
+            {},
+        ]
+        result = svc.duplicate_slide("pres123", "s1", position=0)
+        assert result["new_slide_id"] == "s1_copy"
 
 
 class TestConvertMarkdownToSlides:
@@ -512,27 +537,20 @@ class TestConvertMarkdownToSlides:
         result = svc.convert_markdown_to_slides("Title Only", slide_dicts)
         assert result["slide_count"] == 1
 
-    def test_with_folder_id(self):
+    def test_failure_after_creation_includes_id(self):
         svc, mock_slides, mock_drive = _make_service()
 
         mock_drive.files().create().execute.return_value = {
-            "id": "p1",
-            "name": "In Folder",
+            "id": "orphan_id",
+            "name": "Orphan",
         }
 
-        mock_slides.presentations().get().execute.side_effect = [
-            {"slides": []},
-            {"slides": []},
-        ]
+        mock_slides.presentations().get().execute.side_effect = Exception("API down")
 
-        mock_slides.presentations().batchUpdate().execute.return_value = {"replies": []}
-
-        result = svc.convert_markdown_to_slides(
-            "In Folder",
-            [{"title": "S1", "body_text": "B", "speaker_notes": ""}],
-            folder_id="folder123",
-        )
-        assert result["id"] == "p1"
+        with pytest.raises(ValueError, match="orphan_id"):
+            svc.convert_markdown_to_slides(
+                "Orphan", [{"title": "X", "body_text": "Y", "speaker_notes": ""}]
+            )
 
 
 class TestReadShapeStyle:
@@ -636,12 +654,53 @@ class TestExtractText:
         }
         assert GoogleSlidesService._extract_text(text_obj) == "Hello World"
 
+    def test_strips_only_trailing_newline(self):
+        text_obj = {
+            "textElements": [
+                {"textRun": {"content": "Line 1\nLine 2\n"}},
+            ]
+        }
+        assert GoogleSlidesService._extract_text(text_obj) == "Line 1\nLine 2"
+
+    def test_preserves_internal_whitespace(self):
+        text_obj = {
+            "textElements": [
+                {"textRun": {"content": "  spaced  "}},
+            ]
+        }
+        assert GoogleSlidesService._extract_text(text_obj) == "  spaced  "
+
+
+class TestGetElementType:
+    def test_shape(self):
+        assert GoogleSlidesService._get_element_type({"shape": {}}) == "SHAPE"
+
+    def test_image(self):
+        assert GoogleSlidesService._get_element_type({"image": {}}) == "IMAGE"
+
+    def test_table(self):
+        assert GoogleSlidesService._get_element_type({"table": {}}) == "TABLE"
+
+    def test_line(self):
+        assert GoogleSlidesService._get_element_type({"line": {}}) == "LINE"
+
+    def test_video(self):
+        assert GoogleSlidesService._get_element_type({"video": {}}) == "VIDEO"
+
+    def test_unknown(self):
+        assert GoogleSlidesService._get_element_type({}) == "UNKNOWN"
+
 
 class TestGetLayoutName:
     def test_no_slide_properties(self):
         assert GoogleSlidesService._get_layout_name({}) == ""
 
-    def test_with_layout(self):
+    def test_with_layout_map(self):
+        slide = {"slideProperties": {"layoutObjectId": "layout_abc"}}
+        layout_map = {"layout_abc": "Title Slide"}
+        assert GoogleSlidesService._get_layout_name(slide, layout_map) == "Title Slide"
+
+    def test_fallback_to_id_without_map(self):
         slide = {"slideProperties": {"layoutObjectId": "layout_abc"}}
         assert GoogleSlidesService._get_layout_name(slide) == "layout_abc"
 
