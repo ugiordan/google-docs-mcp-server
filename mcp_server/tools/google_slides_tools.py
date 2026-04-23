@@ -12,7 +12,6 @@ from mcp_server.validation import (
     MAX_MARKDOWN_BYTES,
     validate_content_size,
     validate_folder_id,
-    validate_layout,
     validate_presentation_id,
     validate_shape_id,
     validate_slide_id,
@@ -144,8 +143,10 @@ def _add_slide(
 ) -> str:
     try:
         validate_presentation_id(presentation_id)
-        if layout:
-            validate_layout(layout)
+        if layout and len(layout) > 255:
+            return _error_response(
+                "Layout name exceeds 255 characters", "VALIDATION_ERROR"
+            )
         if position >= 0:
             pos = position
         else:
@@ -406,7 +407,7 @@ def register_google_slides_tools(
 
     @mcp.tool()
     def add_slide(presentation_id: str, position: int = -1, layout: str = "") -> str:
-        """Add a slide to a presentation. Position is 0-indexed. Layout: BLANK, TITLE, TITLE_AND_BODY, TITLE_ONLY, CAPTION_ONLY, SECTION_HEADER, etc."""
+        """Add a slide to a presentation. Position is 0-indexed. Layout accepts custom layout display names from the presentation's theme (e.g. 'Interior title and two column body') or standard names (BLANK, TITLE, TITLE_AND_BODY, TITLE_ONLY, etc.). Use read_presentation to see available layouts."""
         return _add_slide(service, presentation_id, position, layout)
 
     @mcp.tool()

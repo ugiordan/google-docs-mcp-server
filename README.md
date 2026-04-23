@@ -149,7 +149,7 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `list_presentations` | List presentations, optionally filtered by name | `query` (str, optional), `max_results` (int, 1-100, default 10) |
 | `read_presentation` | Read all slide content: text, speaker notes, shape IDs, layout info | `presentation_id` (str) |
 | `create_presentation` | Create a new presentation, optionally from a template | `title` (str), `folder_id` (str, optional), `template_name` (str, optional) |
-| `add_slide` | Add a slide at a position with optional layout | `presentation_id` (str), `position` (int, optional), `layout` (str, optional) |
+| `add_slide` | Add a slide at a position with optional layout | `presentation_id` (str), `position` (int, optional), `layout` (str, optional: custom display name or predefined) |
 | `delete_slide` | Delete a slide (two-step nonce confirmation) | `presentation_id` (str), `slide_id` (str), `nonce` (str, required on second call) |
 | `update_slide_text` | Replace text in a shape, preserving font/size/color | `presentation_id` (str), `slide_id` (str), `shape_id` (str), `content` (str) |
 | `delete_shape` | Delete a shape, image, or element from a slide (two-step nonce confirmation) | `presentation_id` (str), `shape_id` (str), `nonce` (str, required on second call) |
@@ -291,7 +291,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (503 unit tests)
+# Run tests (501 unit tests)
 uv run pytest -v
 
 # Lint and format

@@ -156,15 +156,36 @@ class GoogleSlidesService:
 
         return retry_on_429(_create)
 
+    _LAYOUT_FIELDS = "layouts.objectId," "layouts.layoutProperties.displayName"
+
+    def _resolve_layout_reference(self, presentation_id, layout):
+        """Resolve a layout name to a slideLayoutReference dict.
+
+        Tries custom layout display names first (case-insensitive), then
+        falls back to predefinedLayout for standard Slides API names.
+        """
+        _fields = self._LAYOUT_FIELDS
+        presentation = retry_on_429(
+            lambda: self.slides_service.presentations()
+            .get(presentationId=presentation_id, fields=_fields)
+            .execute()
+        )
+        layout_lower = layout.lower()
+        for entry in presentation.get("layouts", []):
+            display_name = entry.get("layoutProperties", {}).get("displayName", "")
+            if display_name.lower() == layout_lower:
+                return {"layoutId": entry["objectId"]}
+        return {"predefinedLayout": layout}
+
     def add_slide(self, presentation_id, position=None, layout=None):
         def _add():
             request = {"createSlide": {}}
             if position is not None:
                 request["createSlide"]["insertionIndex"] = position
             if layout:
-                request["createSlide"]["slideLayoutReference"] = {
-                    "predefinedLayout": layout
-                }
+                request["createSlide"]["slideLayoutReference"] = (
+                    self._resolve_layout_reference(presentation_id, layout)
+                )
 
             response = (
                 self.slides_service.presentations()

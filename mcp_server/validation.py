@@ -133,30 +133,6 @@ def validate_shape_id(shape_id: str) -> bool:
     return True
 
 
-ALLOWED_LAYOUTS = {
-    "BLANK",
-    "CAPTION_ONLY",
-    "TITLE",
-    "TITLE_AND_BODY",
-    "TITLE_AND_TWO_COLUMNS",
-    "TITLE_ONLY",
-    "SECTION_HEADER",
-    "SECTION_TITLE_AND_DESCRIPTION",
-    "ONE_COLUMN_TEXT",
-    "MAIN_POINT",
-    "BIG_NUMBER",
-}
-
-
-def validate_layout(layout: str) -> bool:
-    if layout not in ALLOWED_LAYOUTS:
-        raise ValueError(
-            f"Invalid layout '{layout}'. "
-            f"Allowed: {', '.join(sorted(ALLOWED_LAYOUTS))}"
-        )
-    return True
-
-
 def validate_mime_type(mime_type: str) -> bool:
     if not mime_type:
         raise ValueError("MIME type cannot be empty")

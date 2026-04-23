@@ -232,12 +232,23 @@ class TestAddSlide:
         result = json.loads(_add_slide(svc, "pres1234567", position=2))
         assert result["slide_id"] == "s1"
 
-    def test_invalid_layout(self):
+    def test_custom_layout_name_passed_through(self):
         svc = _mock_service()
-        result = json.loads(_add_slide(svc, "pres1234567", layout="INVALID"))
-        assert result["code"] == "VALIDATION_ERROR"
+        svc.add_slide.return_value = {
+            "presentation_id": "pres1234567",
+            "slide_id": "s1",
+        }
+        result = json.loads(
+            _add_slide(svc, "pres1234567", layout="Interior title and two column body")
+        )
+        assert result["slide_id"] == "s1"
+        svc.add_slide.assert_called_with(
+            "pres1234567",
+            position=None,
+            layout="Interior title and two column body",
+        )
 
-    def test_valid_layout(self):
+    def test_predefined_layout_passed_through(self):
         svc = _mock_service()
         svc.add_slide.return_value = {
             "presentation_id": "pres1234567",
@@ -245,6 +256,12 @@ class TestAddSlide:
         }
         result = json.loads(_add_slide(svc, "pres1234567", layout="BLANK"))
         assert result["slide_id"] == "s1"
+        svc.add_slide.assert_called_with("pres1234567", position=None, layout="BLANK")
+
+    def test_layout_name_too_long(self):
+        svc = _mock_service()
+        result = json.loads(_add_slide(svc, "pres1234567", layout="x" * 256))
+        assert result["code"] == "VALIDATION_ERROR"
 
     def test_negative_position_treated_as_none(self):
         svc = _mock_service()
