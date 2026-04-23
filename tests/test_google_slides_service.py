@@ -530,7 +530,7 @@ class TestDeleteShape:
 
 
 class TestUpdateSpeakerNotes:
-    def test_updates_notes(self):
+    def test_updates_notes_with_existing_text(self):
         svc, mock_slides, _ = _make_service()
         mock_slides.presentations().get().execute.return_value = {
             "slides": [
@@ -538,7 +538,19 @@ class TestUpdateSpeakerNotes:
                     "objectId": "slide1",
                     "slideProperties": {
                         "notesPage": {
-                            "notesProperties": {"speakerNotesObjectId": "notes1"}
+                            "notesProperties": {"speakerNotesObjectId": "notes1"},
+                            "pageElements": [
+                                {
+                                    "objectId": "notes1",
+                                    "shape": {
+                                        "text": {
+                                            "textElements": [
+                                                {"textRun": {"content": "Old notes\n"}}
+                                            ]
+                                        }
+                                    },
+                                }
+                            ],
                         }
                     },
                 }
@@ -547,6 +559,39 @@ class TestUpdateSpeakerNotes:
         mock_slides.presentations().batchUpdate().execute.return_value = {}
         result = svc.update_speaker_notes("pres123", "slide1", "My notes")
         assert result["status"] == "updated"
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        requests = call_args[1]["body"]["requests"]
+        assert len(requests) == 2
+        assert "deleteText" in requests[0]
+        assert "insertText" in requests[1]
+
+    def test_empty_notes_skips_delete(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().get().execute.return_value = {
+            "slides": [
+                {
+                    "objectId": "slide1",
+                    "slideProperties": {
+                        "notesPage": {
+                            "notesProperties": {"speakerNotesObjectId": "notes1"},
+                            "pageElements": [
+                                {
+                                    "objectId": "notes1",
+                                    "shape": {"text": {"textElements": []}},
+                                }
+                            ],
+                        }
+                    },
+                }
+            ]
+        }
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.update_speaker_notes("pres123", "slide1", "New notes")
+        assert result["status"] == "updated"
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        requests = call_args[1]["body"]["requests"]
+        assert len(requests) == 1
+        assert "insertText" in requests[0]
 
     def test_raises_on_missing_notes_shape(self):
         svc, mock_slides, _ = _make_service()

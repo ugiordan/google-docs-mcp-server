@@ -320,7 +320,9 @@ class GoogleSlidesService:
         def _update():
             _fields = (
                 "slides.objectId,"
-                "slides.slideProperties.notesPage.notesProperties.speakerNotesObjectId"
+                "slides.slideProperties.notesPage.notesProperties.speakerNotesObjectId,"
+                "slides.slideProperties.notesPage.pageElements.objectId,"
+                "slides.slideProperties.notesPage.pageElements.shape.text"
             )
             presentation = (
                 self.slides_service.presentations()
@@ -329,14 +331,25 @@ class GoogleSlidesService:
             )
 
             notes_shape_id = None
+            has_text = False
             for slide in presentation.get("slides", []):
                 if slide["objectId"] == slide_id:
-                    notes_shape_id = (
-                        slide.get("slideProperties", {})
-                        .get("notesPage", {})
-                        .get("notesProperties", {})
-                        .get("speakerNotesObjectId")
+                    notes_page = slide.get("slideProperties", {}).get("notesPage", {})
+                    notes_shape_id = notes_page.get("notesProperties", {}).get(
+                        "speakerNotesObjectId"
                     )
+                    if notes_shape_id:
+                        for el in notes_page.get("pageElements", []):
+                            if el.get("objectId") == notes_shape_id:
+                                for te in (
+                                    el.get("shape", {})
+                                    .get("text", {})
+                                    .get("textElements", [])
+                                ):
+                                    if te.get("textRun", {}).get("content", "").strip():
+                                        has_text = True
+                                        break
+                                break
                     break
 
             if not notes_shape_id:
@@ -344,21 +357,25 @@ class GoogleSlidesService:
                     f"Could not find speaker notes shape for slide '{slide_id}'"
                 )
 
-            requests = [
-                {
-                    "deleteText": {
-                        "objectId": notes_shape_id,
-                        "textRange": {"type": "ALL"},
+            requests = []
+            if has_text:
+                requests.append(
+                    {
+                        "deleteText": {
+                            "objectId": notes_shape_id,
+                            "textRange": {"type": "ALL"},
+                        }
                     }
-                },
+                )
+            requests.append(
                 {
                     "insertText": {
                         "objectId": notes_shape_id,
                         "insertionIndex": 0,
                         "text": notes,
                     }
-                },
-            ]
+                }
+            )
             self.slides_service.presentations().batchUpdate(
                 presentationId=presentation_id, body={"requests": requests}
             ).execute()
