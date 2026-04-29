@@ -765,7 +765,7 @@ class TestUpdateTextStyle:
         }
         result = json.loads(
             _update_text_style(
-                svc, "pres1234567", "shape_abc", bold="true", font_size=14.0
+                svc, "pres1234567", "shape_abc", bold=True, font_size=14.0
             )
         )
         assert result["status"] == "styled"
@@ -785,9 +785,9 @@ class TestUpdateTextStyle:
                 svc,
                 "pres1234567",
                 "shape_abc",
-                bold="true",
-                italic="false",
-                underline="true",
+                bold=True,
+                italic=False,
+                underline=True,
                 font_family="Arial",
                 font_size=18.0,
                 foreground_color="#FF0000",
@@ -813,27 +813,16 @@ class TestUpdateTextStyle:
         assert result["code"] == "VALIDATION_ERROR"
         assert "At least one" in result["error"]
 
-    def test_invalid_bold_value(self):
+    def test_bold_false_is_valid_style(self):
         svc = _mock_service()
-        result = json.loads(
-            _update_text_style(svc, "pres1234567", "shape_abc", bold="yes")
-        )
-        assert result["code"] == "VALIDATION_ERROR"
-        assert "bold" in result["error"]
-
-    def test_invalid_italic_value(self):
-        svc = _mock_service()
-        result = json.loads(
-            _update_text_style(svc, "pres1234567", "shape_abc", italic="maybe")
-        )
-        assert result["code"] == "VALIDATION_ERROR"
-
-    def test_invalid_underline_value(self):
-        svc = _mock_service()
-        result = json.loads(
-            _update_text_style(svc, "pres1234567", "shape_abc", underline="1")
-        )
-        assert result["code"] == "VALIDATION_ERROR"
+        svc.update_text_style.return_value = {
+            "presentation_id": "pres1234567",
+            "shape_id": "s1",
+            "status": "styled",
+        }
+        result = json.loads(_update_text_style(svc, "pres1234567", "s1", bold=False))
+        assert result["status"] == "styled"
+        svc.update_text_style.assert_called_once_with("pres1234567", "s1", bold=False)
 
     def test_invalid_alignment(self):
         svc = _mock_service()
@@ -911,16 +900,16 @@ class TestUpdateTextStyle:
 
     def test_invalid_presentation_id(self):
         svc = _mock_service()
-        result = json.loads(_update_text_style(svc, "bad!", "s1", bold="true"))
+        result = json.loads(_update_text_style(svc, "bad!", "s1", bold=True))
         assert result["code"] == "VALIDATION_ERROR"
 
     def test_invalid_shape_id(self):
         svc = _mock_service()
-        result = json.loads(_update_text_style(svc, "pres1234567", "", bold="true"))
+        result = json.loads(_update_text_style(svc, "pres1234567", "", bold=True))
         assert result["code"] == "VALIDATION_ERROR"
 
     def test_api_error(self):
         svc = _mock_service()
         svc.update_text_style.side_effect = Exception("API failure")
-        result = json.loads(_update_text_style(svc, "pres1234567", "s1", bold="true"))
+        result = json.loads(_update_text_style(svc, "pres1234567", "s1", bold=True))
         assert result["code"] == "API_ERROR"

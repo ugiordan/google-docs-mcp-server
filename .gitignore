@@ -54,6 +54,9 @@ tokens.json
 # Internal working documents
 docs/superpowers/
 
+# MkDocs build output
+site/
+
 # OS
 .DS_Store
 Thumbs.db

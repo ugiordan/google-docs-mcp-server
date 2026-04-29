@@ -15,7 +15,10 @@ class GoogleSlidesService:
 
     def list_presentations(self, query=None, max_results=10):
         def _list():
-            q_parts = ["mimeType='application/vnd.google-apps.presentation'"]
+            q_parts = [
+                "mimeType='application/vnd.google-apps.presentation'",
+                "trashed=false",
+            ]
             if query:
                 sanitized = sanitize_query(query)
                 q_parts.append(f"name contains '{sanitized}'")
@@ -184,11 +187,15 @@ class GoogleSlidesService:
         semantic matching by placeholder types for predefined layout names,
         then falls back to predefinedLayout for standard themes.
         """
-        presentation = retry_on_429(
-            lambda: self.slides_service.presentations()
-            .get(presentationId=presentation_id, fields=self._LAYOUT_FIELDS)
-            .execute()
-        )
+
+        def _fetch_layouts():
+            return (
+                self.slides_service.presentations()
+                .get(presentationId=presentation_id, fields=self._LAYOUT_FIELDS)
+                .execute()
+            )
+
+        presentation = retry_on_429(_fetch_layouts)
         layouts = presentation.get("layouts", [])
 
         layout_lower = layout.lower()
@@ -548,186 +555,203 @@ class GoogleSlidesService:
         presentation_id = result["id"]
 
         try:
-            _init_fields = (
-                "slides.objectId,"
-                "layouts.objectId,"
-                "layouts.layoutProperties.displayName,"
-                "layouts.pageElements.shape.placeholder.type"
+            return self._populate_slides(
+                presentation_id, title, slide_dicts, template_presentation_id
             )
-            presentation = retry_on_429(
-                lambda: self.slides_service.presentations()
+        except Exception as e:
+            raise ValueError(
+                f"Presentation created ({presentation_id}) but population failed: {e}"
+            ) from e
+
+    def _populate_slides(
+        self, presentation_id, title, slide_dicts, template_presentation_id
+    ):
+        _init_fields = (
+            "slides.objectId,"
+            "layouts.objectId,"
+            "layouts.layoutProperties.displayName,"
+            "layouts.pageElements.shape.placeholder.type"
+        )
+
+        def _fetch_init():
+            return (
+                self.slides_service.presentations()
                 .get(presentationId=presentation_id, fields=_init_fields)
                 .execute()
             )
-            default_slide_ids = [s["objectId"] for s in presentation.get("slides", [])]
 
-            title_body_layout_id = None
-            title_only_layout_id = None
-            if template_presentation_id:
-                for layout in presentation.get("layouts", []):
-                    placeholders = set()
-                    for el in layout.get("pageElements", []):
-                        pt = el.get("shape", {}).get("placeholder", {}).get("type")
-                        if pt:
-                            placeholders.add(pt)
-                    if "TITLE" in placeholders and "BODY" in placeholders:
-                        if not title_body_layout_id:
-                            title_body_layout_id = layout["objectId"]
-                    elif "TITLE" in placeholders and "BODY" not in placeholders:
-                        if not title_only_layout_id:
-                            title_only_layout_id = layout["objectId"]
+        presentation = retry_on_429(_fetch_init)
+        default_slide_ids = [s["objectId"] for s in presentation.get("slides", [])]
 
-                if default_slide_ids:
-                    delete_requests = [
-                        {"deleteObject": {"objectId": sid}} for sid in default_slide_ids
-                    ]
-                    retry_on_429(
-                        lambda: self.slides_service.presentations()
-                        .batchUpdate(
-                            presentationId=presentation_id,
-                            body={"requests": delete_requests},
-                        )
-                        .execute()
-                    )
-                    default_slide_ids = []
+        title_body_layout_id = None
+        title_only_layout_id = None
+        if template_presentation_id:
+            for layout in presentation.get("layouts", []):
+                placeholders = set()
+                for el in layout.get("pageElements", []):
+                    pt = el.get("shape", {}).get("placeholder", {}).get("type")
+                    if pt:
+                        placeholders.add(pt)
+                if "TITLE" in placeholders and "BODY" in placeholders:
+                    if not title_body_layout_id:
+                        title_body_layout_id = layout["objectId"]
+                elif "TITLE" in placeholders and "BODY" not in placeholders:
+                    if not title_only_layout_id:
+                        title_only_layout_id = layout["objectId"]
 
-            requests = []
-            for i, slide_data in enumerate(slide_dicts):
-                has_body = bool(slide_data.get("body_text"))
-                if template_presentation_id and (
-                    title_body_layout_id or title_only_layout_id
-                ):
-                    layout_id = (
-                        title_body_layout_id if has_body else title_only_layout_id
-                    ) or title_body_layout_id
-                    layout_ref = {"layoutId": layout_id}
-                else:
-                    layout_ref = {
-                        "predefinedLayout": (
-                            "TITLE_AND_BODY" if has_body else "TITLE_ONLY"
-                        )
-                    }
-                create_req = {
+            if default_slide_ids:
+                del_reqs = [
+                    {"deleteObject": {"objectId": sid}} for sid in default_slide_ids
+                ]
+
+                def _delete_defaults():
+                    self.slides_service.presentations().batchUpdate(
+                        presentationId=presentation_id,
+                        body={"requests": del_reqs},
+                    ).execute()
+
+                retry_on_429(_delete_defaults)
+                default_slide_ids = []
+
+        create_requests = []
+        for i, slide_data in enumerate(slide_dicts):
+            has_body = bool(slide_data.get("body_text"))
+            if template_presentation_id and (
+                title_body_layout_id or title_only_layout_id
+            ):
+                layout_id = (
+                    title_body_layout_id if has_body else title_only_layout_id
+                ) or title_body_layout_id
+                layout_ref = {"layoutId": layout_id}
+            else:
+                layout_ref = {
+                    "predefinedLayout": ("TITLE_AND_BODY" if has_body else "TITLE_ONLY")
+                }
+            create_requests.append(
+                {
                     "createSlide": {
                         "insertionIndex": i,
                         "slideLayoutReference": layout_ref,
                     }
                 }
-                requests.append(create_req)
+            )
 
-            if requests:
-                response = retry_on_429(
-                    lambda: self.slides_service.presentations()
+        if create_requests:
+
+            def _create_slides():
+                return (
+                    self.slides_service.presentations()
                     .batchUpdate(
                         presentationId=presentation_id,
-                        body={"requests": requests},
+                        body={"requests": create_requests},
                     )
                     .execute()
                 )
 
-                new_slide_ids = [
-                    r["createSlide"]["objectId"]
-                    for r in response.get("replies", [])
-                    if "createSlide" in r
-                ]
+            response = retry_on_429(_create_slides)
 
-                _convert_fields = (
-                    "slides.objectId,"
-                    "slides.pageElements.objectId,"
-                    "slides.pageElements.shape.placeholder.type,"
-                    "slides.pageElements.shape.text,"
-                    "slides.slideProperties.notesPage"
-                )
-                presentation = retry_on_429(
-                    lambda: self.slides_service.presentations()
+            new_slide_ids = [
+                r["createSlide"]["objectId"]
+                for r in response.get("replies", [])
+                if "createSlide" in r
+            ]
+
+            _convert_fields = (
+                "slides.objectId,"
+                "slides.pageElements.objectId,"
+                "slides.pageElements.shape.placeholder.type,"
+                "slides.pageElements.shape.text,"
+                "slides.slideProperties.notesPage"
+            )
+
+            def _fetch_created():
+                return (
+                    self.slides_service.presentations()
                     .get(presentationId=presentation_id, fields=_convert_fields)
                     .execute()
                 )
 
-                text_requests = []
-                for idx, sd in enumerate(slide_dicts):
-                    if idx >= len(new_slide_ids):
+            presentation = retry_on_429(_fetch_created)
+
+            text_requests = []
+            for idx, sd in enumerate(slide_dicts):
+                if idx >= len(new_slide_ids):
+                    break
+                s_id = new_slide_ids[idx]
+
+                slide = None
+                for s in presentation.get("slides", []):
+                    if s["objectId"] == s_id:
+                        slide = s
                         break
-                    s_id = new_slide_ids[idx]
+                if not slide:
+                    continue
 
-                    slide = None
-                    for s in presentation.get("slides", []):
-                        if s["objectId"] == s_id:
-                            slide = s
-                            break
-                    if not slide:
-                        continue
+                for element in slide.get("pageElements", []):
+                    shape = element.get("shape", {})
+                    placeholder_type = shape.get("placeholder", {}).get("type", "")
+                    obj_id = element["objectId"]
 
-                    for element in slide.get("pageElements", []):
-                        shape = element.get("shape", {})
-                        placeholder_type = shape.get("placeholder", {}).get("type", "")
-                        obj_id = element["objectId"]
-
-                        if placeholder_type == "TITLE" and sd.get("title"):
-                            text_requests.append(
-                                {
-                                    "insertText": {
-                                        "objectId": obj_id,
-                                        "insertionIndex": 0,
-                                        "text": sd["title"],
-                                    }
-                                }
-                            )
-                        elif placeholder_type == "BODY" and sd.get("body_text"):
-                            text_requests.append(
-                                {
-                                    "insertText": {
-                                        "objectId": obj_id,
-                                        "insertionIndex": 0,
-                                        "text": sd["body_text"],
-                                    }
-                                }
-                            )
-
-                    notes_shape_id = (
-                        slide.get("slideProperties", {})
-                        .get("notesPage", {})
-                        .get("notesProperties", {})
-                        .get("speakerNotesObjectId")
-                    )
-                    if notes_shape_id and sd.get("speaker_notes"):
+                    if placeholder_type == "TITLE" and sd.get("title"):
                         text_requests.append(
                             {
                                 "insertText": {
-                                    "objectId": notes_shape_id,
+                                    "objectId": obj_id,
                                     "insertionIndex": 0,
-                                    "text": sd["speaker_notes"],
+                                    "text": sd["title"],
+                                }
+                            }
+                        )
+                    elif placeholder_type == "BODY" and sd.get("body_text"):
+                        text_requests.append(
+                            {
+                                "insertText": {
+                                    "objectId": obj_id,
+                                    "insertionIndex": 0,
+                                    "text": sd["body_text"],
                                 }
                             }
                         )
 
-                if text_requests:
-                    retry_on_429(
-                        lambda: self.slides_service.presentations()
-                        .batchUpdate(
-                            presentationId=presentation_id,
-                            body={"requests": text_requests},
-                        )
-                        .execute()
+                notes_shape_id = (
+                    slide.get("slideProperties", {})
+                    .get("notesPage", {})
+                    .get("notesProperties", {})
+                    .get("speakerNotesObjectId")
+                )
+                if notes_shape_id and sd.get("speaker_notes"):
+                    text_requests.append(
+                        {
+                            "insertText": {
+                                "objectId": notes_shape_id,
+                                "insertionIndex": 0,
+                                "text": sd["speaker_notes"],
+                            }
+                        }
                     )
 
-            if default_slide_ids:
-                delete_requests = [
-                    {"deleteObject": {"objectId": sid}} for sid in default_slide_ids
-                ]
-                retry_on_429(
-                    lambda: self.slides_service.presentations()
-                    .batchUpdate(
+            if text_requests:
+
+                def _insert_text():
+                    self.slides_service.presentations().batchUpdate(
                         presentationId=presentation_id,
-                        body={"requests": delete_requests},
-                    )
-                    .execute()
-                )
-        except Exception:
-            raise ValueError(
-                f"Failed to populate presentation. "
-                f"Partial presentation created with ID: {presentation_id}"
-            ) from None
+                        body={"requests": text_requests},
+                    ).execute()
+
+                retry_on_429(_insert_text)
+
+        if default_slide_ids:
+            final_del_reqs = [
+                {"deleteObject": {"objectId": sid}} for sid in default_slide_ids
+            ]
+
+            def _delete_remaining():
+                self.slides_service.presentations().batchUpdate(
+                    presentationId=presentation_id,
+                    body={"requests": final_del_reqs},
+                ).execute()
+
+            retry_on_429(_delete_remaining)
 
         return {
             "id": presentation_id,
@@ -750,11 +774,15 @@ class GoogleSlidesService:
     def _read_shape_style(self, presentation_id, slide_id, shape_id):
         """Returns (style_dict, has_text) for the given shape."""
         _fields = "slides.objectId,slides.pageElements.objectId,slides.pageElements.shape.text"
-        presentation = (
-            self.slides_service.presentations()
-            .get(presentationId=presentation_id, fields=_fields)
-            .execute()
-        )
+
+        def _fetch():
+            return (
+                self.slides_service.presentations()
+                .get(presentationId=presentation_id, fields=_fields)
+                .execute()
+            )
+
+        presentation = retry_on_429(_fetch)
         for slide in presentation.get("slides", []):
             if slide["objectId"] != slide_id:
                 continue

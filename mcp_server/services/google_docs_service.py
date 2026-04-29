@@ -106,8 +106,10 @@ class GoogleDocsService:
         """
 
         def _list():
-            # Build the query
-            q_parts = ["mimeType='application/vnd.google-apps.document'"]
+            q_parts = [
+                "mimeType='application/vnd.google-apps.document'",
+                "trashed=false",
+            ]
             if query:
                 sanitized = sanitize_query(query)
                 q_parts.append(f"name contains '{sanitized}'")
@@ -120,6 +122,7 @@ class GoogleDocsService:
                     q=q,
                     pageSize=max_results,
                     fields="files(id,name,createdTime,modifiedTime)",
+                    orderBy="modifiedTime desc",
                 )
                 .execute()
             )
@@ -817,6 +820,73 @@ class GoogleDocsService:
             return self.docs_service.documents().get(documentId=doc_id).execute()
 
         return self._retry_on_429(_get_styles)
+
+    def update_tab_diff(self, doc_id, tab_id, blocks, batch_requests):
+        """Update tab content using diff to preserve comment anchors.
+
+        Compares current tab content against new blocks at the paragraph level.
+        Only changed regions are deleted and re-inserted, preserving comments
+        on unchanged text. Falls back to full replacement if nothing matches.
+
+        Args:
+            doc_id: The document ID
+            tab_id: The tab ID to update
+            blocks: Parsed markdown blocks from parse_markdown()
+            batch_requests: Pre-built requests from blocks_to_batch_requests()
+                (used as fallback when diff finds no common content)
+
+        Returns:
+            Dictionary with id, name, url, updatedTime, and diff_used flag
+        """
+        from mcp_server.services.diff_updater import compute_diff_requests
+
+        def _update():
+            doc = (
+                self.docs_service.documents()
+                .get(documentId=doc_id, includeTabsContent=True)
+                .execute()
+            )
+
+            requests = compute_diff_requests(doc, tab_id, blocks)
+            used_diff = requests is not None
+
+            if requests is None:
+                end_index = self._get_tab_end_index(doc, tab_id)
+                requests = []
+                if end_index > 2:
+                    requests.append(
+                        {
+                            "deleteContentRange": {
+                                "range": {
+                                    "startIndex": 1,
+                                    "endIndex": end_index - 1,
+                                    "tabId": tab_id,
+                                }
+                            }
+                        }
+                    )
+                requests.extend(batch_requests)
+
+            if requests:
+                self.docs_service.documents().batchUpdate(
+                    documentId=doc_id, body={"requests": requests}
+                ).execute()
+
+            file_metadata = (
+                self.drive_service.files()
+                .get(fileId=doc_id, fields="id,name,modifiedTime")
+                .execute()
+            )
+
+            return {
+                "id": file_metadata["id"],
+                "name": file_metadata["name"],
+                "url": f"https://docs.google.com/document/d/{doc_id}/edit",
+                "updatedTime": file_metadata.get("modifiedTime"),
+                "diff_used": used_diff,
+            }
+
+        return self._retry_on_429(_update)
 
     def update_tab_styled(self, doc_id, tab_id, batch_requests):
         """Clear a tab and apply styled content via batchUpdate.

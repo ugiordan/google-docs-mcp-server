@@ -38,9 +38,54 @@ from mcp_server.validation import (
 
 logger = logging.getLogger("google-docs-mcp")
 
-_tag_untrusted = tag_untrusted
-_error_response = error_response
-_handle_api_error = handle_api_error
+
+def _save_comments(service: GoogleDocsService, document_id: str) -> list:
+    try:
+        return service.list_comments(document_id)
+    except Exception as e:
+        logger.warning("Could not save comments before update: %s", e)
+        return []
+
+
+def _restore_comments(
+    service: GoogleDocsService, document_id: str, saved_comments: list
+) -> dict:
+    restored = 0
+    failed = []
+    for comment in saved_comments:
+        if comment.get("resolved"):
+            continue
+        author = comment.get("author", "")
+        content = comment.get("content", "")
+        if author:
+            content = f"[{author}] {content}"
+        quoted = comment.get("quoted_text")
+        try:
+            new_comment = service.comment_on_document(
+                document_id, content, quoted_text=quoted
+            )
+            new_id = new_comment.get("comment_id")
+            for reply in comment.get("replies", []):
+                reply_author = reply.get("author", "")
+                reply_content = reply.get("content", "")
+                if reply_author:
+                    reply_content = f"[{reply_author}] {reply_content}"
+                try:
+                    service.reply_to_comment(document_id, new_id, reply_content)
+                except Exception as e:
+                    logger.warning("Could not restore reply: %s", e)
+            restored += 1
+        except Exception as e:
+            logger.warning("Could not restore comment %s: %s", comment.get("id"), e)
+            failed.append(
+                {
+                    "author": author,
+                    "content": comment.get("content", ""),
+                    "quoted_text": quoted,
+                    "reason": str(e),
+                }
+            )
+    return {"restored": restored, "failed": failed}
 
 
 def _list_documents(
@@ -49,17 +94,17 @@ def _list_documents(
     """List Google Docs documents. Optionally filter by query string."""
     try:
         if max_results < 1 or max_results > 100:
-            return _error_response(
+            return error_response(
                 "max_results must be between 1 and 100", "VALIDATION_ERROR"
             )
         result = service.list_documents(query=query or None, max_results=max_results)
         for doc in result:
             if "name" in doc:
-                doc["name"] = _tag_untrusted(doc["name"])
+                doc["name"] = tag_untrusted(doc["name"])
         logger.info("list_documents: found %d documents", len(result))
         return json.dumps(result)
     except Exception as e:
-        return _handle_api_error(e, "list_documents")
+        return handle_api_error(e, "list_documents")
 
 
 def _read_document(service: GoogleDocsService, document_id: str) -> str:
@@ -69,7 +114,7 @@ def _read_document(service: GoogleDocsService, document_id: str) -> str:
         result = service.read_document(document_id)
         logger.info("read_document: %s", document_id)
         # Wrap untrusted fields in random delimiters to reduce prompt injection surface
-        result["title"] = _tag_untrusted(result.get("title", ""))
+        result["title"] = tag_untrusted(result.get("title", ""))
         content = result.get("content", "")
         boundary = secrets.token_hex(8)
         wrapped = (
@@ -83,7 +128,7 @@ def _read_document(service: GoogleDocsService, document_id: str) -> str:
         # Wrap tab content if multi-tab document
         if "tabs" in result:
             for tab in result["tabs"]:
-                tab["title"] = _tag_untrusted(tab.get("title", ""))
+                tab["title"] = tag_untrusted(tab.get("title", ""))
                 tab_content = tab.get("content", "")
                 tab_boundary = secrets.token_hex(8)
                 tab["content"] = (
@@ -97,13 +142,13 @@ def _read_document(service: GoogleDocsService, document_id: str) -> str:
             comments = service.list_comments(document_id)
             if comments:
                 for c in comments:
-                    c["content"] = _tag_untrusted(c["content"])
+                    c["content"] = tag_untrusted(c["content"])
                     if "quoted_text" in c:
-                        c["quoted_text"] = _tag_untrusted(c["quoted_text"])
-                    c["author"] = _tag_untrusted(c["author"])
+                        c["quoted_text"] = tag_untrusted(c["quoted_text"])
+                    c["author"] = tag_untrusted(c["author"])
                     for reply in c.get("replies", []):
-                        reply["content"] = _tag_untrusted(reply["content"])
-                        reply["author"] = _tag_untrusted(reply["author"])
+                        reply["content"] = tag_untrusted(reply["content"])
+                        reply["author"] = tag_untrusted(reply["author"])
                 result["comments"] = comments
                 result["comment_count"] = len(comments)
         except Exception:
@@ -112,9 +157,9 @@ def _read_document(service: GoogleDocsService, document_id: str) -> str:
 
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "read_document")
+        return handle_api_error(e, "read_document")
 
 
 def _create_document(
@@ -131,13 +176,13 @@ def _create_document(
             title, content=content or None, folder_id=folder_id or None
         )
         if "name" in result:
-            result["name"] = _tag_untrusted(result["name"])
+            result["name"] = tag_untrusted(result["name"])
         logger.info("create_document: %s", result.get("id"))
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "create_document")
+        return handle_api_error(e, "create_document")
 
 
 def _update_document(
@@ -152,22 +197,35 @@ def _update_document(
         validate_document_id(document_id)
         validate_content_size(content, MAX_CONTENT_BYTES)
         if mode not in ("append", "replace"):
-            return _error_response(
+            return error_response(
                 "mode must be 'append' or 'replace'", "VALIDATION_ERROR"
             )
         if tab_id:
             validate_tab_id(tab_id)
+
+        saved_comments = []
+        if mode == "replace":
+            saved_comments = _save_comments(service, document_id)
+
         result = service.update_document(
             document_id, content, mode=mode, tab_id=tab_id or None
         )
         if "name" in result:
-            result["name"] = _tag_untrusted(result["name"])
+            result["name"] = tag_untrusted(result["name"])
+
+        if saved_comments:
+            restore_result = _restore_comments(service, document_id, saved_comments)
+            result["comments_restored"] = restore_result["restored"]
+            result["comments_total"] = len(saved_comments)
+            if restore_result["failed"]:
+                result["comments_failed"] = restore_result["failed"]
+
         logger.info("update_document: %s mode=%s tab=%s", document_id, mode, tab_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "update_document")
+        return handle_api_error(e, "update_document")
 
 
 def _comment_on_document(
@@ -183,13 +241,13 @@ def _comment_on_document(
             document_id, comment, quoted_text=quoted_text or None
         )
         if "content" in result:
-            result["content"] = _tag_untrusted(result["content"])
+            result["content"] = tag_untrusted(result["content"])
         logger.info("comment_on_document: %s", document_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "comment_on_document")
+        return handle_api_error(e, "comment_on_document")
 
 
 def _list_comments(service: GoogleDocsService, document_id: str) -> str:
@@ -199,16 +257,16 @@ def _list_comments(service: GoogleDocsService, document_id: str) -> str:
         comments = service.list_comments(document_id)
         for c in comments:
             if "author" in c:
-                c["author"] = _tag_untrusted(c["author"])
+                c["author"] = tag_untrusted(c["author"])
             if "content" in c:
-                c["content"] = _tag_untrusted(c["content"])
+                c["content"] = tag_untrusted(c["content"])
             if "quoted_text" in c:
-                c["quoted_text"] = _tag_untrusted(c["quoted_text"])
+                c["quoted_text"] = tag_untrusted(c["quoted_text"])
             for r in c.get("replies", []):
                 if "author" in r:
-                    r["author"] = _tag_untrusted(r["author"])
+                    r["author"] = tag_untrusted(r["author"])
                 if "content" in r:
-                    r["content"] = _tag_untrusted(r["content"])
+                    r["content"] = tag_untrusted(r["content"])
         result = {
             "document_id": document_id,
             "comment_count": len(comments),
@@ -217,9 +275,9 @@ def _list_comments(service: GoogleDocsService, document_id: str) -> str:
         logger.info("list_comments: %s (%d comments)", document_id, len(comments))
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "list_comments")
+        return handle_api_error(e, "list_comments")
 
 
 def _reply_to_comment(
@@ -235,13 +293,13 @@ def _reply_to_comment(
         validate_comment(reply)
         result = service.reply_to_comment(document_id, comment_id, reply)
         if "content" in result:
-            result["content"] = _tag_untrusted(result["content"])
+            result["content"] = tag_untrusted(result["content"])
         logger.info("reply_to_comment: %s on %s", comment_id, document_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "reply_to_comment")
+        return handle_api_error(e, "reply_to_comment")
 
 
 def _resolve_comment(
@@ -255,9 +313,9 @@ def _resolve_comment(
         logger.info("resolve_comment: %s on %s", comment_id, document_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "resolve_comment")
+        return handle_api_error(e, "resolve_comment")
 
 
 def _delete_comment(
@@ -271,27 +329,27 @@ def _delete_comment(
         logger.info("delete_comment: %s from %s", comment_id, document_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "delete_comment")
+        return handle_api_error(e, "delete_comment")
 
 
 def _find_folder(service: GoogleDocsService, folder_name: str) -> str:
     """Find a Google Drive folder by name."""
     try:
         if not folder_name or not folder_name.strip():
-            return _error_response("Folder name cannot be empty", "VALIDATION_ERROR")
+            return error_response("Folder name cannot be empty", "VALIDATION_ERROR")
         if len(folder_name) > 255:
-            return _error_response(
+            return error_response(
                 "Folder name exceeds 255 characters", "VALIDATION_ERROR"
             )
         result = service.find_folder(folder_name)
         if result.get("found") and "name" in result:
-            result["name"] = _tag_untrusted(result["name"])
+            result["name"] = tag_untrusted(result["name"])
         logger.info("find_folder: found=%s", result.get("found"))
         return json.dumps(result)
     except Exception as e:
-        return _handle_api_error(e, "find_folder")
+        return handle_api_error(e, "find_folder")
 
 
 def _move_document(service: GoogleDocsService, document_id: str, folder_id: str) -> str:
@@ -301,13 +359,13 @@ def _move_document(service: GoogleDocsService, document_id: str, folder_id: str)
         validate_folder_id(folder_id)
         result = service.move_document(document_id, folder_id)
         if "name" in result:
-            result["name"] = _tag_untrusted(result["name"])
+            result["name"] = tag_untrusted(result["name"])
         logger.info("move_document: %s -> %s", document_id, folder_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "move_document")
+        return handle_api_error(e, "move_document")
 
 
 def _delete_document(
@@ -335,7 +393,7 @@ def _delete_document(
         else:
             # Step 2: Verify nonce and delete
             if not nonce_manager.verify(document_id, nonce):
-                return _error_response(
+                return error_response(
                     "Invalid or expired nonce. Please restart the deletion process.",
                     "NONCE_ERROR",
                 )
@@ -344,14 +402,14 @@ def _delete_document(
             return json.dumps(
                 {
                     "document_id": document_id,
-                    "name": _tag_untrusted(result.get("name", "")),
+                    "name": tag_untrusted(result.get("name", "")),
                     "status": "trashed",
                 }
             )
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "delete_document")
+        return handle_api_error(e, "delete_document")
 
 
 def _create_tab(service: GoogleDocsService, document_id: str, title: str) -> str:
@@ -363,23 +421,49 @@ def _create_tab(service: GoogleDocsService, document_id: str, title: str) -> str
         logger.info("create_tab: %s in %s", result.get("tab_id"), document_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "create_tab")
+        return handle_api_error(e, "create_tab")
 
 
-def _delete_tab(service: GoogleDocsService, document_id: str, tab_id: str) -> str:
-    """Delete a tab from a Google Doc."""
+def _delete_tab(
+    service: GoogleDocsService,
+    nonce_manager: NonceManager,
+    document_id: str,
+    tab_id: str,
+    nonce: str = "",
+) -> str:
+    """Delete a tab from a Google Doc. Requires two-step nonce confirmation."""
     try:
         validate_document_id(document_id)
         validate_tab_id(tab_id)
-        result = service.delete_tab(document_id, tab_id)
-        logger.info("delete_tab: %s from %s", tab_id, document_id)
-        return json.dumps(result)
+        nonce_key = f"{document_id}:tab:{tab_id}"
+        if not nonce:
+            new_nonce = nonce_manager.create(nonce_key)
+            logger.info("delete_tab: nonce created for %s/%s", document_id, tab_id)
+            return json.dumps(
+                {
+                    "document_id": document_id,
+                    "tab_id": tab_id,
+                    "status": "confirm_required",
+                    "nonce": new_nonce,
+                    "expires_in_seconds": 30,
+                    "message": "Call delete_tab again with this nonce to confirm deletion.",
+                }
+            )
+        else:
+            if not nonce_manager.verify(nonce_key, nonce):
+                return error_response(
+                    "Invalid or expired nonce. Please restart the deletion process.",
+                    "NONCE_ERROR",
+                )
+            result = service.delete_tab(document_id, tab_id)
+            logger.info("delete_tab: %s from %s", tab_id, document_id)
+            return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "delete_tab")
+        return handle_api_error(e, "delete_tab")
 
 
 def _rename_tab(
@@ -394,9 +478,9 @@ def _rename_tab(
         logger.info("rename_tab: %s in %s to '%s'", tab_id, document_id, title)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "rename_tab")
+        return handle_api_error(e, "rename_tab")
 
 
 def _convert_markdown_to_doc(
@@ -458,15 +542,15 @@ def _convert_markdown_to_doc(
         return json.dumps(
             {
                 "id": doc_id,
-                "name": _tag_untrusted(result.get("name", title)),
+                "name": tag_untrusted(result.get("name", title)),
                 "url": f"https://docs.google.com/document/d/{doc_id}/edit",
                 "template_used": template_used,
             }
         )
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "convert_markdown_to_doc")
+        return handle_api_error(e, "convert_markdown_to_doc")
 
 
 _DEFAULT_MIME_TYPE = (
@@ -503,7 +587,7 @@ def _upload_document(
         # Count how many input modes are provided
         modes = sum(bool(x) for x in (file_path, file_content_base64, source_file_id))
         if modes != 1:
-            return _error_response(
+            return error_response(
                 "Provide exactly one of: file_path, file_content_base64, or source_file_id",
                 "VALIDATION_ERROR",
             )
@@ -516,7 +600,7 @@ def _upload_document(
                 folder_id=folder_id or None,
             )
             if "name" in result:
-                result["name"] = _tag_untrusted(result["name"])
+                result["name"] = tag_untrusted(result["name"])
             logger.info("upload_document (copy): %s", result.get("id"))
             return json.dumps(result)
 
@@ -524,21 +608,21 @@ def _upload_document(
             # Validate path is under allowed directories
             resolved = os.path.realpath(file_path)
             if not any(resolved.startswith(d) for d in _ALLOWED_UPLOAD_DIRS):
-                return _error_response(
+                return error_response(
                     "file_path must be under /uploads/. "
                     "Mount a host directory: -v $HOME/uploads:/uploads:ro",
                     "VALIDATION_ERROR",
                 )
 
             if not os.path.isfile(resolved):
-                return _error_response(
+                return error_response(
                     f"File not found: {file_path}", "VALIDATION_ERROR"
                 )
 
             ext = os.path.splitext(resolved)[1].lower()
             effective_mime_type = mime_type or _MIME_BY_EXT.get(ext)
             if not effective_mime_type:
-                return _error_response(
+                return error_response(
                     f"Cannot determine MIME type for '{ext}'. "
                     f"Supported: {', '.join(sorted(_MIME_BY_EXT.keys()))}. "
                     "Or specify mime_type explicitly.",
@@ -548,7 +632,7 @@ def _upload_document(
 
             file_size = os.path.getsize(resolved)
             if file_size > MAX_UPLOAD_BYTES:
-                return _error_response(
+                return error_response(
                     f"File exceeds {MAX_UPLOAD_BYTES} bytes", "VALIDATION_ERROR"
                 )
 
@@ -562,7 +646,7 @@ def _upload_document(
                 folder_id=folder_id or None,
             )
             if "name" in result:
-                result["name"] = _tag_untrusted(result["name"])
+                result["name"] = tag_untrusted(result["name"])
             logger.info("upload_document (file): %s", result.get("id"))
             return json.dumps(result)
 
@@ -576,16 +660,16 @@ def _upload_document(
             )
             max_b64_size = (MAX_UPLOAD_BYTES * 4 + 2) // 3  # base64 overhead
             if len(cleaned_b64) > max_b64_size:
-                return _error_response(
+                return error_response(
                     f"File content exceeds {MAX_UPLOAD_BYTES} bytes",
                     "VALIDATION_ERROR",
                 )
             file_bytes = base64.b64decode(cleaned_b64)
         except Exception:
-            return _error_response("Invalid base64-encoded content", "VALIDATION_ERROR")
+            return error_response("Invalid base64-encoded content", "VALIDATION_ERROR")
 
         if len(file_bytes) > MAX_UPLOAD_BYTES:
-            return _error_response(
+            return error_response(
                 f"File content exceeds {MAX_UPLOAD_BYTES} bytes", "VALIDATION_ERROR"
             )
 
@@ -596,13 +680,13 @@ def _upload_document(
             folder_id=folder_id or None,
         )
         if "name" in result:
-            result["name"] = _tag_untrusted(result["name"])
+            result["name"] = tag_untrusted(result["name"])
         logger.info("upload_document: %s", result.get("id"))
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "upload_document")
+        return handle_api_error(e, "upload_document")
 
 
 def _update_document_markdown(
@@ -645,47 +729,49 @@ def _update_document_markdown(
                 template_used = "preserved"
 
         if tab_id:
-            # Tab-specific update: parse markdown and apply via batchUpdate.
-            # This preserves other tabs and uses the document's named styles.
             blocks = parse_markdown(markdown_content)
             batch_requests = blocks_to_batch_requests(blocks, tab_id=tab_id)
-            result = service.update_tab_styled(document_id, tab_id, batch_requests)
-
-            logger.info(
-                "update_document_markdown: %s tab=%s template=%s",
-                document_id,
-                tab_id,
-                template_used,
+            result = service.update_tab_diff(
+                document_id, tab_id, blocks, batch_requests
             )
-            return json.dumps(
-                {
-                    "id": document_id,
-                    "name": _tag_untrusted(result.get("name", "")),
-                    "url": f"https://docs.google.com/document/d/{document_id}/edit",
-                    "tab_id": tab_id,
-                    "template_used": template_used,
-                }
-            )
+            diff_used = result.pop("diff_used", False)
+        else:
+            saved_comments = _save_comments(service, document_id)
+            docx_bytes = markdown_to_docx(markdown_content, styles)
+            result = service.update_file_content(document_id, docx_bytes, _DOCX_MIME)
+            diff_used = False
 
-        # Full document update: generate .docx and replace via Drive API upload.
-        docx_bytes = markdown_to_docx(markdown_content, styles)
-        result = service.update_file_content(document_id, docx_bytes, _DOCX_MIME)
+        restore_result = None
+        if not diff_used and not tab_id and saved_comments:
+            restore_result = _restore_comments(service, document_id, saved_comments)
 
         logger.info(
-            "update_document_markdown: %s template=%s", document_id, template_used
+            "update_document_markdown: %s tab=%s template=%s diff=%s",
+            document_id,
+            tab_id or "all",
+            template_used,
+            diff_used,
         )
-        return json.dumps(
-            {
-                "id": document_id,
-                "name": _tag_untrusted(result.get("name", "")),
-                "url": f"https://docs.google.com/document/d/{document_id}/edit",
-                "template_used": template_used,
-            }
-        )
+
+        response = {
+            "id": document_id,
+            "name": tag_untrusted(result.get("name", "")),
+            "url": f"https://docs.google.com/document/d/{document_id}/edit",
+            "template_used": template_used,
+        }
+        if tab_id:
+            response["tab_id"] = tab_id
+            response["diff_used"] = diff_used
+        if restore_result:
+            response["comments_restored"] = restore_result["restored"]
+            response["comments_total"] = len(saved_comments)
+            if restore_result["failed"]:
+                response["comments_failed"] = restore_result["failed"]
+        return json.dumps(response)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "update_document_markdown")
+        return handle_api_error(e, "update_document_markdown")
 
 
 _VALID_ALIGNMENTS_DOCS = frozenset({"START", "CENTER", "END", "JUSTIFIED"})
@@ -696,11 +782,11 @@ def _update_text_style(
     document_id: str,
     start_index: int = -1,
     end_index: int = -1,
-    bold: str = "",
-    italic: str = "",
-    underline: str = "",
+    bold: bool | None = None,
+    italic: bool | None = None,
+    underline: bool | None = None,
     font_family: str = "",
-    font_size: float = -1,
+    font_size: float | None = None,
     foreground_color: str = "",
     alignment: str = "",
     tab_id: str = "",
@@ -715,34 +801,22 @@ def _update_text_style(
             kwargs["start_index"] = start_index
         if end_index >= 0:
             kwargs["end_index"] = end_index
-        if bold:
-            if bold.lower() not in ("true", "false"):
-                return _error_response(
-                    "bold must be 'true' or 'false'", "VALIDATION_ERROR"
-                )
-            kwargs["bold"] = bold.lower() == "true"
-        if italic:
-            if italic.lower() not in ("true", "false"):
-                return _error_response(
-                    "italic must be 'true' or 'false'", "VALIDATION_ERROR"
-                )
-            kwargs["italic"] = italic.lower() == "true"
-        if underline:
-            if underline.lower() not in ("true", "false"):
-                return _error_response(
-                    "underline must be 'true' or 'false'", "VALIDATION_ERROR"
-                )
-            kwargs["underline"] = underline.lower() == "true"
+        if bold is not None:
+            kwargs["bold"] = bold
+        if italic is not None:
+            kwargs["italic"] = italic
+        if underline is not None:
+            kwargs["underline"] = underline
         if font_family:
             if len(font_family) > 255:
-                return _error_response(
+                return error_response(
                     "font_family exceeds 255 characters", "VALIDATION_ERROR"
                 )
             kwargs["font_family"] = font_family
-        if font_size >= 0:
+        if font_size is not None:
             if font_size <= 0 or font_size > 1000:
-                return _error_response(
-                    "font_size must be between 0 and 1000 PT", "VALIDATION_ERROR"
+                return error_response(
+                    "font_size must be between 1 and 1000 PT", "VALIDATION_ERROR"
                 )
             kwargs["font_size"] = font_size
         if foreground_color:
@@ -750,7 +824,7 @@ def _update_text_style(
             kwargs["foreground_color_rgb"] = foreground_color
         if alignment:
             if alignment.upper() not in _VALID_ALIGNMENTS_DOCS:
-                return _error_response(
+                return error_response(
                     f"alignment must be one of: {', '.join(sorted(_VALID_ALIGNMENTS_DOCS))}",
                     "VALIDATION_ERROR",
                 )
@@ -770,19 +844,116 @@ def _update_text_style(
                 "alignment",
             )
         ):
-            return _error_response(
+            return error_response(
                 "At least one style property must be specified", "VALIDATION_ERROR"
             )
 
         result = service.update_text_style(document_id, **kwargs)
         if "name" in result:
-            result["name"] = _tag_untrusted(result["name"])
+            result["name"] = tag_untrusted(result["name"])
         logger.info("update_text_style: %s", document_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "update_text_style")
+        return handle_api_error(e, "update_text_style")
+
+
+def _find_replace_document(
+    service: GoogleDocsService,
+    document_id: str,
+    replacements: str,
+    tab_id: str = "",
+    match_case: bool = True,
+) -> str:
+    """Find and replace text in a Google Doc. Preserves comments on unchanged text."""
+    try:
+        validate_document_id(document_id)
+        if tab_id:
+            validate_tab_id(tab_id)
+
+        try:
+            pairs = json.loads(replacements)
+        except json.JSONDecodeError as e:
+            return error_response(
+                f"replacements must be valid JSON: {e}", "VALIDATION_ERROR"
+            )
+
+        if not isinstance(pairs, list):
+            return error_response(
+                "replacements must be a JSON array", "VALIDATION_ERROR"
+            )
+        if not pairs:
+            return error_response(
+                "replacements array cannot be empty", "VALIDATION_ERROR"
+            )
+        if len(pairs) > 100:
+            return error_response(
+                "Maximum 100 replacements per call", "VALIDATION_ERROR"
+            )
+
+        requests = []
+        for i, pair in enumerate(pairs):
+            if not isinstance(pair, dict):
+                return error_response(
+                    f"replacements[{i}] must be an object", "VALIDATION_ERROR"
+                )
+            find_text = pair.get("find", "")
+            replace_text = pair.get("replace", "")
+            if not find_text:
+                return error_response(
+                    f'replacements[{i}] missing "find" value', "VALIDATION_ERROR"
+                )
+            if not isinstance(find_text, str) or not isinstance(replace_text, str):
+                return error_response(
+                    f"replacements[{i}] find/replace must be strings",
+                    "VALIDATION_ERROR",
+                )
+
+            req = {
+                "replaceAllText": {
+                    "containsText": {
+                        "text": find_text,
+                        "matchCase": match_case,
+                    },
+                    "replaceText": replace_text,
+                }
+            }
+            if tab_id:
+                req["replaceAllText"]["tabsCriteria"] = {"tabIds": [tab_id]}
+            requests.append(req)
+
+        response = service.batch_update(document_id, requests)
+
+        replaced_count = 0
+        details = []
+        for reply in response.get("replies", []):
+            replace_reply = reply.get("replaceAllText", {})
+            count = replace_reply.get("occurrencesChanged", 0)
+            replaced_count += count
+            details.append(count)
+
+        result = {
+            "status": "success",
+            "document_id": document_id,
+            "replacements_requested": len(pairs),
+            "total_occurrences_changed": replaced_count,
+            "per_replacement": details,
+        }
+        if tab_id:
+            result["tab_id"] = tab_id
+
+        logger.info(
+            "find_replace_document: %s replaced=%d tab=%s",
+            document_id,
+            replaced_count,
+            tab_id,
+        )
+        return json.dumps(result)
+    except ValueError as e:
+        return error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return handle_api_error(e, "find_replace_document")
 
 
 def register_google_docs_tools(
@@ -821,9 +992,9 @@ def register_google_docs_tools(
         return _create_tab(service, document_id, title)
 
     @mcp.tool()
-    def delete_tab(document_id: str, tab_id: str) -> str:
-        """Delete a tab from a Google Doc. Cannot delete the last remaining tab."""
-        return _delete_tab(service, document_id, tab_id)
+    def delete_tab(document_id: str, tab_id: str, nonce: str = "") -> str:
+        """Delete a tab from a Google Doc. Cannot delete the last remaining tab. Requires two-step nonce confirmation. IMPORTANT: Always confirm with the user before completing the second step."""
+        return _delete_tab(service, nonce_manager, document_id, tab_id, nonce)
 
     @mcp.tool()
     def rename_tab(document_id: str, tab_id: str, title: str) -> str:
@@ -923,16 +1094,16 @@ def register_google_docs_tools(
         document_id: str,
         start_index: int = -1,
         end_index: int = -1,
-        bold: str = "",
-        italic: str = "",
-        underline: str = "",
+        bold: bool | None = None,
+        italic: bool | None = None,
+        underline: bool | None = None,
         font_family: str = "",
-        font_size: float = -1,
+        font_size: float | None = None,
         foreground_color: str = "",
         alignment: str = "",
         tab_id: str = "",
     ) -> str:
-        """Style text in a Google Doc without replacing content. Applies to entire document/tab by default, or specify start_index/end_index for a range. Set bold/italic/underline ('true'/'false'), font_family, font_size (PT), foreground_color ('#RRGGBB'), alignment (START/CENTER/END/JUSTIFIED). At least one style property required. Use tab_id to target a specific tab."""
+        """Style text in a Google Doc without replacing content. Applies to entire document/tab by default, or specify start_index/end_index for a range. Set bold/italic/underline (true/false), font_family, font_size (PT), foreground_color ('#RRGGBB'), alignment (START/CENTER/END/JUSTIFIED). At least one style property required. Use tab_id to target a specific tab."""
         return _update_text_style(
             service,
             document_id,
@@ -946,4 +1117,16 @@ def register_google_docs_tools(
             foreground_color,
             alignment,
             tab_id,
+        )
+
+    @mcp.tool()
+    def find_replace_document(
+        document_id: str,
+        replacements: str,
+        tab_id: str = "",
+        match_case: bool = True,
+    ) -> str:
+        """Find and replace text in a Google Doc without losing comments. Pass replacements as a JSON array of {"find": "old text", "replace": "new text"} objects. Replaces ALL occurrences of each find string. Use tab_id to restrict to a specific tab. Preserves all comments anchored to unchanged text."""
+        return _find_replace_document(
+            service, document_id, replacements, tab_id, match_case
         )

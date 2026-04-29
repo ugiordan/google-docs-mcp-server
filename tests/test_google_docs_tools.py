@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from mcp_server.config import Template, TemplateConfig
 from mcp_server.nonce import NonceManager
+from mcp_server.tools.common import error_response
 from mcp_server.tools.google_docs_tools import (
     _comment_on_document,
     _convert_markdown_to_doc,
@@ -13,8 +14,8 @@ from mcp_server.tools.google_docs_tools import (
     _delete_comment,
     _delete_document,
     _delete_tab,
-    _error_response,
     _find_folder,
+    _find_replace_document,
     _list_comments,
     _list_documents,
     _move_document,
@@ -22,6 +23,8 @@ from mcp_server.tools.google_docs_tools import (
     _rename_tab,
     _reply_to_comment,
     _resolve_comment,
+    _restore_comments,
+    _save_comments,
     _update_document,
     _update_document_markdown,
     _update_text_style,
@@ -31,7 +34,7 @@ from mcp_server.tools.google_docs_tools import (
 
 class TestErrorResponse:
     def test_error_response_format(self):
-        result = _error_response("Something went wrong", "API_ERROR")
+        result = error_response("Something went wrong", "API_ERROR")
         data = json.loads(result)
         assert data == {"error": "Something went wrong", "code": "API_ERROR"}
 
@@ -385,6 +388,179 @@ class TestUpdateDocument:
 
         assert "error" in data
         assert data["code"] == "VALIDATION_ERROR"
+
+
+class TestCommentPreservation:
+    def _sample_comments(self):
+        return [
+            {
+                "id": "c1",
+                "author": "Gerard",
+                "content": "Fix the wording here",
+                "resolved": False,
+                "quoted_text": "broken sentence",
+                "replies": [
+                    {"author": "Ugo", "content": "Good catch, will fix"},
+                ],
+            },
+            {
+                "id": "c2",
+                "author": "Ana",
+                "content": "LGTM",
+                "resolved": True,
+            },
+        ]
+
+    def test_save_comments_success(self):
+        service = MagicMock()
+        service.list_comments.return_value = self._sample_comments()
+        result = _save_comments(service, "doc1234567890")
+        assert len(result) == 2
+        service.list_comments.assert_called_once_with("doc1234567890")
+
+    def test_save_comments_api_failure_returns_empty(self):
+        service = MagicMock()
+        service.list_comments.side_effect = Exception("API error")
+        result = _save_comments(service, "doc1234567890")
+        assert result == []
+
+    def test_restore_comments_skips_resolved(self):
+        service = MagicMock()
+        service.comment_on_document.return_value = {"comment_id": "new1"}
+        result = _restore_comments(service, "doc1234567890", self._sample_comments())
+        assert result["restored"] == 1
+        assert result["failed"] == []
+        service.comment_on_document.assert_called_once()
+
+    def test_restore_comments_preserves_author_and_quoted_text(self):
+        service = MagicMock()
+        service.comment_on_document.return_value = {"comment_id": "new1"}
+        _restore_comments(service, "doc1234567890", self._sample_comments())
+        call_args = service.comment_on_document.call_args
+        assert call_args[0][1] == "[Gerard] Fix the wording here"
+        assert call_args[1]["quoted_text"] == "broken sentence"
+
+    def test_restore_comments_recreates_replies(self):
+        service = MagicMock()
+        service.comment_on_document.return_value = {"comment_id": "new1"}
+        _restore_comments(service, "doc1234567890", self._sample_comments())
+        service.reply_to_comment.assert_called_once_with(
+            "doc1234567890", "new1", "[Ugo] Good catch, will fix"
+        )
+
+    def test_restore_comments_handles_creation_failure(self):
+        service = MagicMock()
+        service.comment_on_document.side_effect = Exception("API error")
+        result = _restore_comments(service, "doc1234567890", self._sample_comments())
+        assert result["restored"] == 0
+        assert len(result["failed"]) == 1
+        assert result["failed"][0]["author"] == "Gerard"
+        assert result["failed"][0]["quoted_text"] == "broken sentence"
+
+    def test_restore_comments_handles_reply_failure(self):
+        service = MagicMock()
+        service.comment_on_document.return_value = {"comment_id": "new1"}
+        service.reply_to_comment.side_effect = Exception("Reply failed")
+        result = _restore_comments(service, "doc1234567890", self._sample_comments())
+        assert result["restored"] == 1
+
+    def test_restore_comments_empty_list(self):
+        service = MagicMock()
+        result = _restore_comments(service, "doc1234567890", [])
+        assert result["restored"] == 0
+        assert result["failed"] == []
+        service.comment_on_document.assert_not_called()
+
+    def test_update_document_replace_preserves_comments(self):
+        service = MagicMock()
+        service.list_comments.return_value = self._sample_comments()
+        service.comment_on_document.return_value = {"comment_id": "new1"}
+        service.update_document.return_value = {
+            "id": "doc123",
+            "name": "Test",
+        }
+        result = _update_document(
+            service, document_id="doc1234567890", content="New", mode="replace"
+        )
+        data = json.loads(result)
+        assert data["comments_restored"] == 1
+        assert data["comments_total"] == 2
+
+    def test_update_document_append_skips_comment_preservation(self):
+        service = MagicMock()
+        service.update_document.return_value = {"id": "doc123", "name": "Test"}
+        result = _update_document(
+            service, document_id="doc1234567890", content="More", mode="append"
+        )
+        data = json.loads(result)
+        assert "comments_restored" not in data
+        service.list_comments.assert_not_called()
+
+    def test_update_markdown_full_doc_preserves_comments(self):
+        service = MagicMock()
+        service.list_comments.return_value = self._sample_comments()
+        service.comment_on_document.return_value = {"comment_id": "new1"}
+        service.get_template_styles.return_value = {"namedStyles": {"styles": []}}
+        service.update_file_content.return_value = {
+            "id": "doc1234567890",
+            "name": "Test",
+        }
+        template_config = TemplateConfig(templates=[])
+
+        with patch("mcp_server.tools.google_docs_tools.markdown_to_docx") as mock_docx:
+            mock_docx.return_value = b"PK\x03\x04fake-docx"
+            result = _update_document_markdown(
+                service,
+                template_config,
+                document_id="doc1234567890",
+                markdown_content="Hello",
+            )
+            data = json.loads(result)
+            assert data["comments_restored"] == 1
+            assert data["comments_total"] == 2
+
+    def test_update_markdown_tab_uses_diff(self):
+        service = MagicMock()
+        service.get_template_styles.return_value = {"namedStyles": {"styles": []}}
+        service.update_tab_diff.return_value = {
+            "id": "doc1234567890",
+            "name": "Test",
+            "diff_used": True,
+        }
+        template_config = TemplateConfig(templates=[])
+
+        result = _update_document_markdown(
+            service,
+            template_config,
+            document_id="doc1234567890",
+            markdown_content="Hello",
+            tab_id="t.abc123",
+        )
+        data = json.loads(result)
+        assert data["diff_used"] is True
+        assert "comments_restored" not in data
+        service.list_comments.assert_not_called()
+
+    def test_update_markdown_no_comments_no_extra_fields(self):
+        service = MagicMock()
+        service.list_comments.return_value = []
+        service.get_template_styles.return_value = {"namedStyles": {"styles": []}}
+        service.update_file_content.return_value = {
+            "id": "doc1234567890",
+            "name": "Test",
+        }
+        template_config = TemplateConfig(templates=[])
+
+        with patch("mcp_server.tools.google_docs_tools.markdown_to_docx") as mock_docx:
+            mock_docx.return_value = b"PK\x03\x04fake-docx"
+            result = _update_document_markdown(
+                service,
+                template_config,
+                document_id="doc1234567890",
+                markdown_content="Hello",
+            )
+            data = json.loads(result)
+            assert "comments_restored" not in data
 
 
 class TestCommentOnDocument:
@@ -1391,11 +1567,12 @@ class TestUpdateDocumentMarkdownWithTabId:
     def test_update_markdown_with_tab_id(self):
         service = MagicMock()
         service.get_template_styles.return_value = {"namedStyles": {"styles": []}}
-        service.update_tab_styled.return_value = {
+        service.update_tab_diff.return_value = {
             "id": "doc1234567890",
             "name": "Test",
             "url": "https://docs.google.com/document/d/doc1234567890/edit",
             "updatedTime": "2026-01-01T00:00:00Z",
+            "diff_used": True,
         }
         template_config = TemplateConfig(templates=[])
 
@@ -1411,8 +1588,7 @@ class TestUpdateDocumentMarkdownWithTabId:
 
         assert data["id"] == "doc1234567890"
         assert data["tab_id"] == "t.abc123"
-        service.update_tab_styled.assert_called_once()
-        # Should NOT use .docx upload path
+        service.update_tab_diff.assert_called_once()
         service.update_file_content.assert_not_called()
 
     def test_update_markdown_with_tab_id_and_template(self):
@@ -1427,11 +1603,12 @@ class TestUpdateDocumentMarkdownWithTabId:
                 ]
             }
         }
-        service.update_tab_styled.return_value = {
+        service.update_tab_diff.return_value = {
             "id": "doc1234567890",
             "name": "Test",
             "url": "https://docs.google.com/document/d/doc1234567890/edit",
             "updatedTime": "2026-01-01T00:00:00Z",
+            "diff_used": True,
         }
         template_config = TemplateConfig(
             templates=[Template(name="default", doc_id="template123456", default=True)]
@@ -1449,7 +1626,7 @@ class TestUpdateDocumentMarkdownWithTabId:
 
         assert data["template_used"] == "default"
         assert data["tab_id"] == "t.abc123"
-        service.update_tab_styled.assert_called_once()
+        service.update_tab_diff.assert_called_once()
 
     def test_update_markdown_invalid_tab_id(self):
         service = MagicMock()
@@ -1471,9 +1648,10 @@ class TestUpdateDocumentMarkdownWithTabId:
     def test_update_markdown_tab_id_calls_batch_requests(self):
         service = MagicMock()
         service.get_template_styles.return_value = {"namedStyles": {"styles": []}}
-        service.update_tab_styled.return_value = {
+        service.update_tab_diff.return_value = {
             "id": "doc1234567890",
             "name": "Test",
+            "diff_used": True,
         }
         template_config = TemplateConfig(templates=[])
 
@@ -1541,23 +1719,71 @@ class TestCreateTab:
 
 
 class TestDeleteTab:
-    def test_delete_tab_success(self):
+    def test_delete_tab_step1_nonce_creation(self):
+        service = MagicMock()
+        nonce_manager = NonceManager()
+
+        result = _delete_tab(
+            service, nonce_manager, document_id="doc1234567890", tab_id="t.abc123"
+        )
+        data = json.loads(result)
+
+        assert data["status"] == "confirm_required"
+        assert "nonce" in data
+        assert data["document_id"] == "doc1234567890"
+        assert data["tab_id"] == "t.abc123"
+        assert data["expires_in_seconds"] == 30
+        service.delete_tab.assert_not_called()
+
+    def test_delete_tab_step2_successful_deletion(self):
         service = MagicMock()
         service.delete_tab.return_value = {
             "document_id": "doc1234567890",
             "deleted_tab_id": "t.abc123",
         }
+        nonce_manager = NonceManager()
 
-        result = _delete_tab(service, document_id="doc1234567890", tab_id="t.abc123")
+        result1 = _delete_tab(
+            service, nonce_manager, document_id="doc1234567890", tab_id="t.abc123"
+        )
+        data1 = json.loads(result1)
+        nonce = data1["nonce"]
+
+        result2 = _delete_tab(
+            service,
+            nonce_manager,
+            document_id="doc1234567890",
+            tab_id="t.abc123",
+            nonce=nonce,
+        )
+        data2 = json.loads(result2)
+
+        assert data2["deleted_tab_id"] == "t.abc123"
+        service.delete_tab.assert_called_once_with("doc1234567890", "t.abc123")
+
+    def test_delete_tab_invalid_nonce(self):
+        service = MagicMock()
+        nonce_manager = NonceManager()
+
+        result = _delete_tab(
+            service,
+            nonce_manager,
+            document_id="doc1234567890",
+            tab_id="t.abc123",
+            nonce="invalid_nonce",
+        )
         data = json.loads(result)
 
-        assert data["deleted_tab_id"] == "t.abc123"
-        service.delete_tab.assert_called_once_with("doc1234567890", "t.abc123")
+        assert data["code"] == "NONCE_ERROR"
+        service.delete_tab.assert_not_called()
 
     def test_delete_tab_validation_error_tab_id(self):
         service = MagicMock()
+        nonce_manager = NonceManager()
 
-        result = _delete_tab(service, document_id="doc1234567890", tab_id="")
+        result = _delete_tab(
+            service, nonce_manager, document_id="doc1234567890", tab_id=""
+        )
         data = json.loads(result)
 
         assert data["code"] == "VALIDATION_ERROR"
@@ -1565,9 +1791,21 @@ class TestDeleteTab:
     def test_delete_tab_api_error(self):
         service = MagicMock()
         service.delete_tab.side_effect = Exception("Cannot delete last tab")
+        nonce_manager = NonceManager()
 
-        result = _delete_tab(service, document_id="doc1234567890", tab_id="t.0")
-        data = json.loads(result)
+        result1 = _delete_tab(
+            service, nonce_manager, document_id="doc1234567890", tab_id="t.0"
+        )
+        nonce = json.loads(result1)["nonce"]
+
+        result2 = _delete_tab(
+            service,
+            nonce_manager,
+            document_id="doc1234567890",
+            tab_id="t.0",
+            nonce=nonce,
+        )
+        data = json.loads(result2)
 
         assert data["code"] == "API_ERROR"
 
@@ -1637,7 +1875,7 @@ class TestUpdateTextStyle:
             "updatedTime": "2024-01-01T00:00:00Z",
         }
         result = json.loads(
-            _update_text_style(service, "doc1234567890", bold="true", font_size=14.0)
+            _update_text_style(service, "doc1234567890", bold=True, font_size=14.0)
         )
         assert result["id"] == "doc1234567890"
         service.update_text_style.assert_called_once_with(
@@ -1658,9 +1896,9 @@ class TestUpdateTextStyle:
                 "doc1234567890",
                 start_index=5,
                 end_index=20,
-                bold="true",
-                italic="false",
-                underline="true",
+                bold=True,
+                italic=False,
+                underline=True,
                 font_family="Arial",
                 font_size=18.0,
                 foreground_color="#FF0000",
@@ -1697,23 +1935,17 @@ class TestUpdateTextStyle:
         assert result["code"] == "VALIDATION_ERROR"
         assert "At least one" in result["error"]
 
-    def test_invalid_bold_value(self):
+    def test_bold_false_is_valid_style(self):
         service = MagicMock()
-        result = json.loads(_update_text_style(service, "doc1234567890", bold="yes"))
-        assert result["code"] == "VALIDATION_ERROR"
-        assert "bold" in result["error"]
-
-    def test_invalid_italic_value(self):
-        service = MagicMock()
-        result = json.loads(
-            _update_text_style(service, "doc1234567890", italic="maybe")
-        )
-        assert result["code"] == "VALIDATION_ERROR"
-
-    def test_invalid_underline_value(self):
-        service = MagicMock()
-        result = json.loads(_update_text_style(service, "doc1234567890", underline="1"))
-        assert result["code"] == "VALIDATION_ERROR"
+        service.update_text_style.return_value = {
+            "id": "doc1234567890",
+            "name": "D",
+            "url": "https://docs.google.com/document/d/doc1234567890/edit",
+            "updatedTime": "2024-01-01T00:00:00Z",
+        }
+        result = json.loads(_update_text_style(service, "doc1234567890", bold=False))
+        assert "id" in result
+        service.update_text_style.assert_called_once_with("doc1234567890", bold=False)
 
     def test_invalid_alignment(self):
         service = MagicMock()
@@ -1794,7 +2026,7 @@ class TestUpdateTextStyle:
 
     def test_invalid_document_id(self):
         service = MagicMock()
-        result = json.loads(_update_text_style(service, "bad!", bold="true"))
+        result = json.loads(_update_text_style(service, "bad!", bold=True))
         assert result["code"] == "VALIDATION_ERROR"
 
     def test_with_tab_id(self):
@@ -1806,7 +2038,7 @@ class TestUpdateTextStyle:
             "updatedTime": "2024-01-01T00:00:00Z",
         }
         result = json.loads(
-            _update_text_style(service, "doc1234567890", bold="true", tab_id="t.0")
+            _update_text_style(service, "doc1234567890", bold=True, tab_id="t.0")
         )
         assert "id" in result
         service.update_text_style.assert_called_once_with(
@@ -1821,12 +2053,190 @@ class TestUpdateTextStyle:
             "url": "https://docs.google.com/document/d/doc1234567890/edit",
             "updatedTime": "2024-01-01T00:00:00Z",
         }
-        result = json.loads(_update_text_style(service, "doc1234567890", bold="true"))
+        result = json.loads(_update_text_style(service, "doc1234567890", bold=True))
         assert "<untrusted-data-" in result["name"]
         assert "My Doc" in result["name"]
 
     def test_api_error(self):
         service = MagicMock()
         service.update_text_style.side_effect = Exception("API failure")
-        result = json.loads(_update_text_style(service, "doc1234567890", bold="true"))
+        result = json.loads(_update_text_style(service, "doc1234567890", bold=True))
         assert result["code"] == "API_ERROR"
+
+
+class TestFindReplaceDocument:
+    def test_single_replacement(self):
+        service = MagicMock()
+        service.batch_update.return_value = {
+            "replies": [{"replaceAllText": {"occurrencesChanged": 3}}]
+        }
+        replacements = json.dumps([{"find": "foo", "replace": "bar"}])
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", replacements)
+        )
+        assert result["status"] == "success"
+        assert result["total_occurrences_changed"] == 3
+        assert result["per_replacement"] == [3]
+        assert result["replacements_requested"] == 1
+        reqs = service.batch_update.call_args[0][1]
+        assert len(reqs) == 1
+        assert reqs[0]["replaceAllText"]["containsText"]["text"] == "foo"
+        assert reqs[0]["replaceAllText"]["replaceText"] == "bar"
+        assert reqs[0]["replaceAllText"]["containsText"]["matchCase"] is True
+
+    def test_multiple_replacements(self):
+        service = MagicMock()
+        service.batch_update.return_value = {
+            "replies": [
+                {"replaceAllText": {"occurrencesChanged": 2}},
+                {"replaceAllText": {"occurrencesChanged": 1}},
+            ]
+        }
+        replacements = json.dumps(
+            [
+                {"find": "old1", "replace": "new1"},
+                {"find": "old2", "replace": "new2"},
+            ]
+        )
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", replacements)
+        )
+        assert result["total_occurrences_changed"] == 3
+        assert result["per_replacement"] == [2, 1]
+        assert result["replacements_requested"] == 2
+
+    def test_with_tab_id(self):
+        service = MagicMock()
+        service.batch_update.return_value = {
+            "replies": [{"replaceAllText": {"occurrencesChanged": 1}}]
+        }
+        replacements = json.dumps([{"find": "x", "replace": "y"}])
+        result = json.loads(
+            _find_replace_document(
+                service, "doc1234567890", replacements, tab_id="t.abc123456"
+            )
+        )
+        assert result["tab_id"] == "t.abc123456"
+        reqs = service.batch_update.call_args[0][1]
+        assert reqs[0]["replaceAllText"]["tabsCriteria"] == {"tabIds": ["t.abc123456"]}
+
+    def test_case_insensitive(self):
+        service = MagicMock()
+        service.batch_update.return_value = {
+            "replies": [{"replaceAllText": {"occurrencesChanged": 5}}]
+        }
+        replacements = json.dumps([{"find": "Hello", "replace": "Hi"}])
+        result = json.loads(
+            _find_replace_document(
+                service, "doc1234567890", replacements, match_case=False
+            )
+        )
+        assert result["total_occurrences_changed"] == 5
+        reqs = service.batch_update.call_args[0][1]
+        assert reqs[0]["replaceAllText"]["containsText"]["matchCase"] is False
+
+    def test_no_tab_id_omits_tabs_criteria(self):
+        service = MagicMock()
+        service.batch_update.return_value = {
+            "replies": [{"replaceAllText": {"occurrencesChanged": 1}}]
+        }
+        replacements = json.dumps([{"find": "a", "replace": "b"}])
+        _find_replace_document(service, "doc1234567890", replacements)
+        reqs = service.batch_update.call_args[0][1]
+        assert "tabsCriteria" not in reqs[0]["replaceAllText"]
+
+    def test_invalid_json(self):
+        service = MagicMock()
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", "not json")
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "valid JSON" in result["error"]
+
+    def test_not_array(self):
+        service = MagicMock()
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", '{"find":"a"}')
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "array" in result["error"]
+
+    def test_empty_array(self):
+        service = MagicMock()
+        result = json.loads(_find_replace_document(service, "doc1234567890", "[]"))
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "empty" in result["error"]
+
+    def test_too_many_replacements(self):
+        service = MagicMock()
+        pairs = [{"find": f"f{i}", "replace": f"r{i}"} for i in range(101)]
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", json.dumps(pairs))
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "100" in result["error"]
+
+    def test_missing_find_key(self):
+        service = MagicMock()
+        replacements = json.dumps([{"replace": "bar"}])
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", replacements)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "find" in result["error"]
+
+    def test_empty_find_value(self):
+        service = MagicMock()
+        replacements = json.dumps([{"find": "", "replace": "bar"}])
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", replacements)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_non_string_values(self):
+        service = MagicMock()
+        replacements = json.dumps([{"find": 123, "replace": "bar"}])
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", replacements)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_document_id(self):
+        service = MagicMock()
+        replacements = json.dumps([{"find": "a", "replace": "b"}])
+        result = json.loads(_find_replace_document(service, "short", replacements))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_api_error(self):
+        service = MagicMock()
+        service.batch_update.side_effect = Exception("API failure")
+        replacements = json.dumps([{"find": "a", "replace": "b"}])
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", replacements)
+        )
+        assert result["code"] == "API_ERROR"
+
+    def test_zero_occurrences(self):
+        service = MagicMock()
+        service.batch_update.return_value = {
+            "replies": [{"replaceAllText": {"occurrencesChanged": 0}}]
+        }
+        replacements = json.dumps([{"find": "nonexistent", "replace": "new"}])
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", replacements)
+        )
+        assert result["status"] == "success"
+        assert result["total_occurrences_changed"] == 0
+        assert result["per_replacement"] == [0]
+
+    def test_replace_with_empty_string(self):
+        service = MagicMock()
+        service.batch_update.return_value = {
+            "replies": [{"replaceAllText": {"occurrencesChanged": 2}}]
+        }
+        replacements = json.dumps([{"find": "remove me", "replace": ""}])
+        result = json.loads(
+            _find_replace_document(service, "doc1234567890", replacements)
+        )
+        assert result["status"] == "success"
+        assert result["total_occurrences_changed"] == 2

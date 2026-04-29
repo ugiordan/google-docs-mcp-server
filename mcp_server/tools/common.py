@@ -37,9 +37,26 @@ def parse_hex_color(hex_color: str) -> dict:
 
 def handle_api_error(e: Exception, operation: str) -> str:
     logger.error("%s error: %s", operation, e)
-    if isinstance(e, HttpError) and e.resp.status == 401:
+    if isinstance(e, HttpError):
+        status = e.resp.status
+        if status == 401:
+            return error_response(
+                "Authentication expired. Please re-run the --auth flow.",
+                "REAUTH_REQUIRED",
+            )
+        if status == 403:
+            return error_response(
+                "Permission denied. Check that you have access to this resource.",
+                "FORBIDDEN",
+            )
+        if status == 404:
+            return error_response(
+                "Resource not found. Verify the ID is correct.",
+                "NOT_FOUND",
+            )
+    if isinstance(e, RuntimeError) and "pending delete" in str(e):
         return error_response(
-            "Authentication expired. Please re-run the --auth flow.",
-            "REAUTH_REQUIRED",
+            "Too many pending delete confirmations. Wait 30 seconds and retry.",
+            "RATE_LIMITED",
         )
     return error_response("An internal error occurred", "API_ERROR")
