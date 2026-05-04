@@ -113,6 +113,15 @@ class TestListDocuments:
 class TestReadDocument:
     """Tests for read_document method."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_native_mime(self, mock_drive_service):
+        """Default: files().get() returns native Google Doc MIME type."""
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Test Document",
+            "mimeType": "application/vnd.google-apps.document",
+        }
+
     def test_read_document_success(self, service, mock_docs_service):
         """Test reading a single-tab document."""
         mock_response = {
@@ -329,6 +338,90 @@ class TestReadDocument:
         result = service.read_document("doc123")
 
         assert result["content"] == "Legacy content"
+
+    def test_read_uploaded_docx(self, service, mock_drive_service):
+        """Test reading an uploaded .docx file falls back to text export."""
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Uploaded Report.docx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        mock_drive_service.files().export().execute.return_value = (
+            "Exported plain text content"
+        )
+
+        result = service.read_document("doc123")
+
+        assert result["id"] == "doc123"
+        assert result["title"] == "Uploaded Report.docx"
+        assert result["content"] == "Exported plain text content"
+        assert result["format"] == "exported"
+        assert "wordprocessingml" in result["original_mime_type"]
+
+    def test_read_uploaded_pdf(self, service, mock_drive_service):
+        """Test reading an uploaded PDF falls back to text export."""
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "Report.pdf",
+            "mimeType": "application/pdf",
+        }
+        mock_drive_service.files().export().execute.return_value = b"PDF text content"
+
+        result = service.read_document("doc123")
+
+        assert result["content"] == "PDF text content"
+        assert result["format"] == "exported"
+        assert result["original_mime_type"] == "application/pdf"
+
+    def test_read_uploaded_returns_bytes(self, service, mock_drive_service):
+        """Test that bytes export response is decoded to str."""
+        mock_drive_service.files().get().execute.return_value = {
+            "id": "doc123",
+            "name": "File.docx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        mock_drive_service.files().export().execute.return_value = (
+            b"Content with \xc3\xa9 accent"
+        )
+
+        result = service.read_document("doc123")
+
+        assert result["content"] == "Content with é accent"
+
+    def test_native_doc_does_not_export(
+        self, service, mock_docs_service, mock_drive_service
+    ):
+        """Test that native Google Docs use Docs API, not export."""
+        mock_response = {
+            "documentId": "doc123",
+            "title": "Native Doc",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0", "title": ""},
+                    "documentTab": {
+                        "body": {
+                            "content": [
+                                {
+                                    "paragraph": {
+                                        "elements": [
+                                            {"textRun": {"content": "Native content"}}
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "childTabs": [],
+                }
+            ],
+        }
+        mock_docs_service.documents().get().execute.return_value = mock_response
+
+        result = service.read_document("doc123")
+
+        assert result["content"] == "Native content"
+        assert "format" not in result
+        mock_drive_service.files().export.assert_not_called()
 
 
 class TestCreateDocument:
@@ -1111,47 +1204,46 @@ class TestBatchUpdate:
 class TestErrorHandling:
     """Tests for error handling."""
 
-    def test_handles_403_access_denied(self, service, mock_docs_service):
+    def test_handles_403_access_denied(self, service, mock_drive_service):
         """Test handling of 403 access denied errors."""
         error_response = MagicMock()
         error_response.status = 403
         error_response.reason = "Forbidden"
 
         http_error = HttpError(error_response, b"Access denied")
-        mock_docs_service.documents().get().execute.side_effect = http_error
+        mock_drive_service.files().get().execute.side_effect = http_error
 
         with pytest.raises(Exception) as exc_info:
             service.read_document("doc123")
 
         assert "Access denied" in str(exc_info.value)
 
-    def test_handles_404_not_found(self, service, mock_docs_service):
+    def test_handles_404_not_found(self, service, mock_drive_service):
         """Test handling of 404 not found errors."""
         error_response = MagicMock()
         error_response.status = 404
         error_response.reason = "Not Found"
 
         http_error = HttpError(error_response, b"Document not found")
-        mock_docs_service.documents().get().execute.side_effect = http_error
+        mock_drive_service.files().get().execute.side_effect = http_error
 
         with pytest.raises(Exception) as exc_info:
             service.read_document("doc123")
 
         assert "Document not found" in str(exc_info.value)
 
-    def test_does_not_expose_credentials(self, service, mock_docs_service):
+    def test_does_not_expose_credentials(self, service, mock_drive_service):
         """Test that error messages don't expose credentials."""
         error_response = MagicMock()
         error_response.status = 500
         error_response.reason = "Internal Server Error"
 
         http_error = HttpError(error_response, b"Internal error")
-        mock_docs_service.documents().get().execute.side_effect = http_error
+        mock_drive_service.files().get().execute.side_effect = http_error
 
         with pytest.raises(Exception) as exc_info:
             service.read_document("doc123")
 
-        # Verify no sensitive data in error message
         error_msg = str(exc_info.value)
         assert "credentials" not in error_msg.lower()
         assert "secret" not in error_msg.lower()
@@ -1295,3 +1387,56 @@ class TestUpdateTextStyle:
         body = call_args[1]["body"]
         rng = body["requests"][0]["updateTextStyle"]["range"]
         assert rng["tabId"] == "t.0"
+
+
+class TestGetDocumentBodyContent:
+    def test_returns_first_tab_content(self, service, mock_docs_service):
+        content = [{"paragraph": {}, "startIndex": 1, "endIndex": 10}]
+        mock_docs_service.documents().get().execute.return_value = {
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0"},
+                    "documentTab": {"body": {"content": content}},
+                }
+            ]
+        }
+        result = service.get_document_body_content("doc123")
+        assert result == content
+
+    def test_returns_specific_tab_content(self, service, mock_docs_service):
+        tab1_content = [{"paragraph": {}, "startIndex": 1, "endIndex": 10}]
+        tab2_content = [{"paragraph": {}, "startIndex": 1, "endIndex": 20}]
+        mock_docs_service.documents().get().execute.return_value = {
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0"},
+                    "documentTab": {"body": {"content": tab1_content}},
+                },
+                {
+                    "tabProperties": {"tabId": "t.1"},
+                    "documentTab": {"body": {"content": tab2_content}},
+                },
+            ]
+        }
+        result = service.get_document_body_content("doc123", tab_id="t.1")
+        assert result == tab2_content
+
+    def test_raises_on_missing_tab(self, service, mock_docs_service):
+        mock_docs_service.documents().get().execute.return_value = {
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.0"},
+                    "documentTab": {"body": {"content": []}},
+                }
+            ]
+        }
+        with pytest.raises(ValueError, match="not found"):
+            service.get_document_body_content("doc123", tab_id="t.999")
+
+    def test_falls_back_to_body_without_tabs(self, service, mock_docs_service):
+        content = [{"paragraph": {}, "startIndex": 1, "endIndex": 5}]
+        mock_docs_service.documents().get().execute.return_value = {
+            "body": {"content": content}
+        }
+        result = service.get_document_body_content("doc123")
+        assert result == content

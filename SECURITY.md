@@ -222,22 +222,22 @@ All tool invocations are logged to stderr (the MCP protocol reserves stdout for 
 
 ### Structured JSON Logging
 
-Logs are formatted as JSON for easy parsing:
+Logs are formatted as JSON with four fields:
 
 ```json
 {
-  "timestamp": "2026-03-30T14:23:45.123Z",
+  "timestamp": "2026-03-30 14:23:45,123",
   "level": "INFO",
-  "message": "delete_document: trashed abc123",
-  "tool": "delete_document",
-  "document_id": "abc123"
+  "logger": "mcp_server.tools.google_docs_tools",
+  "message": "delete_document: trashed abc123"
 }
 ```
 
+Tool names, document IDs, and operation outcomes are embedded in the `message` field.
+
 ### What Gets Logged
 
-- Tool names (e.g., `list_documents`, `create_document`)
-- Document IDs (for audit trail)
+- Tool names and document IDs in the message string (for audit trail)
 - Template names used in `convert_markdown_to_doc`
 - Operation outcomes (success, error type)
 
@@ -295,14 +295,16 @@ All Python dependencies are pinned in `uv.lock` with cryptographic hashes. This 
 
 ### Runtime Dependencies
 
-The server has only 6 runtime dependencies:
+The server has 8 runtime dependencies:
 
 - `fastmcp` (MCP framework)
 - `google-api-python-client` (Google APIs)
 - `google-auth-oauthlib` (OAuth flow)
 - `google-auth-httplib2` (Auth transport)
 - `markdown` (Markdown parsing)
+- `python-docx` (DOCX generation)
 - `pyyaml` (YAML parsing)
+- `requests` (HTTP client for token revocation)
 
 This minimal dependency surface reduces the attack surface compared to larger frameworks.
 

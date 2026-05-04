@@ -14,6 +14,7 @@ from mcp_server.tools.google_slides_tools import (
     _create_presentation,
     _delete_shape,
     _delete_slide,
+    _delete_slides,
     _duplicate_slide,
     _list_presentations,
     _read_presentation,
@@ -315,6 +316,105 @@ class TestDeleteSlide:
         nm = _nonce_manager()
         result = json.loads(_delete_slide(svc, nm, "bad", "s1"))
         assert result["code"] == "VALIDATION_ERROR"
+
+
+class TestDeleteSlides:
+    def test_nonce_required(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        result = json.loads(_delete_slides(svc, nm, "pres1234567", "s1,s2,s3"))
+        assert result["status"] == "confirm_required"
+        assert result["slide_count"] == 3
+        assert result["slide_ids"] == ["s1", "s2", "s3"]
+        assert "nonce" in result
+
+    def test_nonce_confirmation(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        svc.delete_slides.return_value = {
+            "presentation_id": "pres1234567",
+            "slide_ids": ["s1", "s2"],
+            "deleted_count": 2,
+            "status": "deleted",
+        }
+        r1 = json.loads(_delete_slides(svc, nm, "pres1234567", "s1,s2"))
+        nonce = r1["nonce"]
+        r2 = json.loads(_delete_slides(svc, nm, "pres1234567", "s1,s2", nonce))
+        assert r2["status"] == "deleted"
+        assert r2["deleted_count"] == 2
+
+    def test_invalid_nonce(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        result = json.loads(
+            _delete_slides(svc, nm, "pres1234567", "s1,s2", "bad_nonce")
+        )
+        assert result["code"] == "NONCE_ERROR"
+
+    def test_nonce_is_order_independent(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        svc.delete_slides.return_value = {
+            "presentation_id": "pres1234567",
+            "slide_ids": ["s2", "s1"],
+            "deleted_count": 2,
+            "status": "deleted",
+        }
+        r1 = json.loads(_delete_slides(svc, nm, "pres1234567", "s2,s1"))
+        nonce = r1["nonce"]
+        r2 = json.loads(_delete_slides(svc, nm, "pres1234567", "s1,s2", nonce))
+        assert r2["status"] == "deleted"
+
+    def test_empty_slide_ids(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        result = json.loads(_delete_slides(svc, nm, "pres1234567", ""))
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "empty" in result["error"]
+
+    def test_too_many_slides(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        ids = ",".join(f"s{i}" for i in range(51))
+        result = json.loads(_delete_slides(svc, nm, "pres1234567", ids))
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "50" in result["error"]
+
+    def test_trailing_comma_ignored(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        result = json.loads(_delete_slides(svc, nm, "pres1234567", "s1,"))
+        assert result["status"] == "confirm_required"
+        assert result["slide_ids"] == ["s1"]
+
+    def test_invalid_presentation_id(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        result = json.loads(_delete_slides(svc, nm, "bad", "s1,s2"))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_single_slide(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        result = json.loads(_delete_slides(svc, nm, "pres1234567", "s1"))
+        assert result["status"] == "confirm_required"
+        assert result["slide_count"] == 1
+
+    def test_api_error(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        svc.delete_slides.side_effect = Exception("API failure")
+        r1 = json.loads(_delete_slides(svc, nm, "pres1234567", "s1,s2"))
+        nonce = r1["nonce"]
+        r2 = json.loads(_delete_slides(svc, nm, "pres1234567", "s1,s2", nonce))
+        assert r2["code"] == "API_ERROR"
+
+    def test_whitespace_in_ids_stripped(self):
+        svc = _mock_service()
+        nm = _nonce_manager()
+        result = json.loads(_delete_slides(svc, nm, "pres1234567", " s1 , s2 , s3 "))
+        assert result["slide_ids"] == ["s1", "s2", "s3"]
+        assert result["slide_count"] == 3
 
 
 class TestUpdateSlideText:
@@ -665,7 +765,7 @@ class TestUpdateTextStyle:
         }
         result = json.loads(
             _update_text_style(
-                svc, "pres1234567", "shape_abc", bold="true", font_size=14.0
+                svc, "pres1234567", "shape_abc", bold=True, font_size=14.0
             )
         )
         assert result["status"] == "styled"
@@ -685,9 +785,9 @@ class TestUpdateTextStyle:
                 svc,
                 "pres1234567",
                 "shape_abc",
-                bold="true",
-                italic="false",
-                underline="true",
+                bold=True,
+                italic=False,
+                underline=True,
                 font_family="Arial",
                 font_size=18.0,
                 foreground_color="#FF0000",
@@ -713,27 +813,16 @@ class TestUpdateTextStyle:
         assert result["code"] == "VALIDATION_ERROR"
         assert "At least one" in result["error"]
 
-    def test_invalid_bold_value(self):
+    def test_bold_false_is_valid_style(self):
         svc = _mock_service()
-        result = json.loads(
-            _update_text_style(svc, "pres1234567", "shape_abc", bold="yes")
-        )
-        assert result["code"] == "VALIDATION_ERROR"
-        assert "bold" in result["error"]
-
-    def test_invalid_italic_value(self):
-        svc = _mock_service()
-        result = json.loads(
-            _update_text_style(svc, "pres1234567", "shape_abc", italic="maybe")
-        )
-        assert result["code"] == "VALIDATION_ERROR"
-
-    def test_invalid_underline_value(self):
-        svc = _mock_service()
-        result = json.loads(
-            _update_text_style(svc, "pres1234567", "shape_abc", underline="1")
-        )
-        assert result["code"] == "VALIDATION_ERROR"
+        svc.update_text_style.return_value = {
+            "presentation_id": "pres1234567",
+            "shape_id": "s1",
+            "status": "styled",
+        }
+        result = json.loads(_update_text_style(svc, "pres1234567", "s1", bold=False))
+        assert result["status"] == "styled"
+        svc.update_text_style.assert_called_once_with("pres1234567", "s1", bold=False)
 
     def test_invalid_alignment(self):
         svc = _mock_service()
@@ -811,16 +900,16 @@ class TestUpdateTextStyle:
 
     def test_invalid_presentation_id(self):
         svc = _mock_service()
-        result = json.loads(_update_text_style(svc, "bad!", "s1", bold="true"))
+        result = json.loads(_update_text_style(svc, "bad!", "s1", bold=True))
         assert result["code"] == "VALIDATION_ERROR"
 
     def test_invalid_shape_id(self):
         svc = _mock_service()
-        result = json.loads(_update_text_style(svc, "pres1234567", "", bold="true"))
+        result = json.loads(_update_text_style(svc, "pres1234567", "", bold=True))
         assert result["code"] == "VALIDATION_ERROR"
 
     def test_api_error(self):
         svc = _mock_service()
         svc.update_text_style.side_effect = Exception("API failure")
-        result = json.loads(_update_text_style(svc, "pres1234567", "s1", bold="true"))
+        result = json.loads(_update_text_style(svc, "pres1234567", "s1", bold=True))
         assert result["code"] == "API_ERROR"

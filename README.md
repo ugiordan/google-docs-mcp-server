@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that provides Google Docs and Google Slide
 
 ## Features
 
-- 31 tools for document and presentation lifecycle management: Docs (list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc, file upload, markdown update, tab management, text styling) and Slides (list, read, create, add/delete/duplicate/reorder slides, update text, text styling, delete shape, speaker notes, markdown-to-slides)
+- 33 tools for document and presentation lifecycle management: Docs (list, read, create, update, delete, comment, move, folder lookup, markdown-to-doc, file upload, markdown update, tab management, text styling, find-and-replace) and Slides (list, read, create, add/delete/bulk delete/duplicate/reorder slides, update text, text styling, delete shape, speaker notes, markdown-to-slides)
 - OAuth 2.0 authentication with scopes (`drive`, `drive.metadata.readonly`, `documents`)
 - Container hardening: read-only filesystem, all capabilities dropped, non-root execution, memory-limited
 - Two-step delete confirmation via server-side cryptographic nonce
@@ -57,7 +57,7 @@ Add to your Claude Code configuration (`~/.claude.json`):
 }
 ```
 
-Restart Claude Code. The `google-docs` MCP server should appear with 31 available tools.
+Restart Claude Code. The `google-docs` MCP server should appear with 33 available tools.
 
 ### Building from source
 
@@ -86,6 +86,7 @@ Then replace `ghcr.io/ugiordan/google-docs-mcp-server:latest` with `localhost/go
 2. Search for and enable each of these APIs:
    - **Google Docs API**: provides document content read/write
    - **Google Drive API**: provides file listing, metadata, move, trash, and comment operations
+   - **Google Slides API**: provides presentation content read/write
 
 ### 3. Configure OAuth Consent Screen
 
@@ -117,7 +118,7 @@ The server requests three scopes during authentication:
 
 | Scope | Access granted |
 |-------|---------------|
-| `drive` | Full read/write/delete access to Google Drive files. Required for comment, move, and delete operations on any document. |
+| `drive` | Full read/write/delete access to Google Drive files. Required for comment, move, and delete operations on any document. Also covers Google Slides API operations. |
 | `drive.metadata.readonly` | Read-only access to file metadata (names, IDs, timestamps, folder structure). Cannot read file content through this scope. |
 | `documents` | Read and write access to Google Docs document content and formatting. |
 
@@ -145,30 +146,32 @@ The `drive` scope grants access to all files in the user's Drive. Container hard
 | `convert_markdown_to_doc` | Convert markdown to a styled document | `markdown_content` (str), `title` (str), `template_name` (str, optional), `folder_id` (str, optional) |
 | `upload_document` | Upload a file as a Google Doc with formatting preserved | `title` (str), `file_path` (str, optional), `file_content_base64` (str, optional), `source_file_id` (str, optional), `mime_type` (str, optional), `folder_id` (str, optional) |
 | `update_document_markdown` | Replace content of an existing Google Doc with styled markdown | `document_id` (str), `markdown_content` (str), `template_name` (str, optional), `tab_id` (str, optional) |
-| `update_doc_text_style` | Style text without replacing content | `document_id` (str), `start_index` (int, optional), `end_index` (int, optional), `bold`/`italic`/`underline` (str, optional), `font_family` (str, optional), `font_size` (float, optional), `foreground_color` (str '#RRGGBB', optional), `alignment` (str, optional), `tab_id` (str, optional) |
+| `update_doc_text_style` | Style text without replacing content | `document_id` (str), `start_index` (int, optional), `end_index` (int, optional), `bold`/`italic`/`underline` (bool, optional), `font_family` (str, optional), `font_size` (float, optional), `foreground_color` (str '#RRGGBB', optional), `alignment` (str, optional), `tab_id` (str, optional) |
+| `find_replace_document` | Find and replace text without losing comments | `document_id` (str), `replacements` (str, JSON array of `{"find":"old","replace":"new"}`), `tab_id` (str, optional), `match_case` (bool, default true) |
 | **Google Slides** | | |
 | `list_presentations` | List presentations, optionally filtered by name | `query` (str, optional), `max_results` (int, 1-100, default 10) |
 | `read_presentation` | Read all slide content: text, speaker notes, shape IDs, layout info | `presentation_id` (str) |
 | `create_presentation` | Create a new presentation, optionally from a template | `title` (str), `folder_id` (str, optional), `template_name` (str, optional) |
 | `add_slide` | Add a slide at a position with optional layout | `presentation_id` (str), `position` (int, optional), `layout` (str, optional: custom display name or predefined) |
 | `delete_slide` | Delete a slide (two-step nonce confirmation) | `presentation_id` (str), `slide_id` (str), `nonce` (str, required on second call) |
+| `delete_slides` | Delete multiple slides at once (two-step nonce confirmation) | `presentation_id` (str), `slide_ids` (str, comma-separated), `nonce` (str, required on second call) |
 | `update_slide_text` | Replace text in a shape, preserving font/size/color | `presentation_id` (str), `slide_id` (str), `shape_id` (str), `content` (str) |
 | `delete_shape` | Delete a shape, image, or element from a slide (two-step nonce confirmation) | `presentation_id` (str), `shape_id` (str), `nonce` (str, required on second call) |
 | `update_speaker_notes` | Set speaker notes for a slide | `presentation_id` (str), `slide_id` (str), `notes` (str) |
 | `duplicate_slide` | Copy a slide within a presentation | `presentation_id` (str), `slide_id` (str), `position` (int, optional) |
 | `reorder_slides` | Move slides to new positions | `presentation_id` (str), `slide_ids` (str, comma-separated), `position` (int) |
-| `update_slide_text_style` | Style all text in a shape without replacing content | `presentation_id` (str), `shape_id` (str), `bold`/`italic`/`underline` (str, optional), `font_family` (str, optional), `font_size` (float, optional), `foreground_color` (str '#RRGGBB', optional), `alignment` (str, optional) |
+| `update_slide_text_style` | Style all text in a shape without replacing content | `presentation_id` (str), `shape_id` (str), `bold`/`italic`/`underline` (bool, optional), `font_family` (str, optional), `font_size` (float, optional), `foreground_color` (str '#RRGGBB', optional), `alignment` (str, optional) |
 | `convert_markdown_to_slides` | Convert markdown to a presentation (slides split on `---`) | `markdown_content` (str), `title` (str), `folder_id` (str, optional), `template_name` (str, optional) |
 
 ### Delete confirmation
 
-`delete_document`, `delete_slide`, and `delete_shape` require two calls. The first call returns a cryptographic nonce (valid for 30 seconds). The second call must include the nonce to confirm. Nonces are single-use, resource-specific, and stored in-memory. Documents are moved to trash, not permanently deleted. Slides and shapes are deleted immediately on confirmation.
+`delete_document`, `delete_slide`, `delete_slides`, and `delete_shape` require two calls. The first call returns a cryptographic nonce (valid for 30 seconds). The second call must include the nonce to confirm. Nonces are single-use, resource-specific, and stored in-memory. Documents are moved to trash, not permanently deleted. Slides and shapes are deleted immediately on confirmation.
 
 ### Tabs
 
 `read_document` returns all tabs when a document has multiple tabs. Each tab includes `tab_id`, `title`, and `content`. Use `create_tab`, `delete_tab`, and `rename_tab` to manage tabs. Use `update_document` with `tab_id` to write content to a specific tab.
 
-`update_document_markdown` supports per-tab updates via the `tab_id` parameter. When `tab_id` is specified, it uses batchUpdate to apply styled content (headings, bold, italic, code, links, blockquotes) to that tab without affecting other tabs. Without `tab_id`, it uploads a .docx file which replaces the entire document including all tabs.
+`update_document_markdown` supports per-tab updates via the `tab_id` parameter. When `tab_id` is specified, it uses paragraph-level diffing to apply only the changes, preserving comment anchors on unchanged text. Without `tab_id`, it uploads a .docx file which replaces the entire document including all tabs.
 
 ### Read output wrapping
 
@@ -190,7 +193,9 @@ Provide exactly one of these. The MCP config mounts `~/uploads` read-only into t
 
 ### Styled markdown update
 
-`update_document_markdown` replaces the content of an existing Google Doc with styled markdown. It reuses the same markdown parsing and template pipeline as `convert_markdown_to_doc`. The existing document content is cleared before the new styled content is applied.
+`update_document_markdown` replaces the content of an existing Google Doc with styled markdown. It reuses the same markdown parsing and template pipeline as `convert_markdown_to_doc`. When no `template_name` is specified, the document's existing named styles (heading fonts, body font, sizes, colors, line spacing) are preserved.
+
+When called with a `tab_id`, the tool uses paragraph-level diffing to only modify changed content. Comments anchored to unchanged text are preserved. When called without `tab_id`, it uploads a .docx file replacement with best-effort comment save/restore (comments whose quoted text no longer exists in the new content may not be re-anchored).
 
 ## Templates
 
@@ -293,7 +298,7 @@ Summary of security measures:
 # Install dependencies
 uv sync
 
-# Run tests (556 unit tests)
+# Run tests
 uv run pytest -v
 
 # Lint and format
@@ -316,6 +321,7 @@ uv run python main.py --revoke  # revoke tokens
 - **Limited host filesystem access**: the server runs in a container. File uploads are restricted to the `/uploads/` mount point. Mount your upload directory in the MCP config: `-v $HOME/uploads:/uploads:ro`.
 - **In-memory nonces**: delete nonces are lost on server restart. If the server restarts between the two delete steps, re-initiate the deletion.
 - **Template style limits**: only heading/body fonts, sizes, spacing, and colors are copied. Complex layouts (columns, page breaks, headers/footers) are not supported.
+- **Comment restoration**: full-document updates save and restore comments on a best-effort basis. Comments whose quoted text no longer exists in the new content cannot be re-anchored.
 
 ## Troubleshooting
 

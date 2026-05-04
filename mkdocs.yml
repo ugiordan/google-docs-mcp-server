@@ -1,0 +1,59 @@
+site_name: Google Docs MCP Server
+site_url: https://ugiordan.github.io/google-docs-mcp-server
+repo_url: https://github.com/ugiordan/google-docs-mcp-server
+repo_name: ugiordan/google-docs-mcp-server
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - def_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quickstart: getting-started/quickstart.md
+      - Google OAuth Setup: getting-started/oauth-setup.md
+  - Tools:
+      - Google Docs: tools/google-docs.md
+      - Google Slides: tools/google-slides.md
+  - Features:
+      - Templates: features/templates.md
+      - Tab Management: features/tabs.md
+      - File Upload: features/file-upload.md
+      - Comment Preservation: features/comment-preservation.md
+  - Security: security.md
+  - Development: development.md

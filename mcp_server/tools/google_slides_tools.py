@@ -2,6 +2,7 @@
 
 import json
 import logging
+import secrets
 
 from mcp_server.config import SlidesTemplateConfig
 from mcp_server.nonce import NonceManager
@@ -26,17 +27,13 @@ from mcp_server.validation import (
 
 logger = logging.getLogger("google-docs-mcp")
 
-_tag_untrusted = tag_untrusted
-_error_response = error_response
-_handle_api_error = handle_api_error
-
 
 def _list_presentations(
     service: GoogleSlidesService, query: str = "", max_results: int = 10
 ) -> str:
     try:
         if max_results < 1 or max_results > 100:
-            return _error_response(
+            return error_response(
                 "max_results must be between 1 and 100", "VALIDATION_ERROR"
             )
         result = service.list_presentations(
@@ -44,11 +41,11 @@ def _list_presentations(
         )
         for pres in result:
             if "name" in pres:
-                pres["name"] = _tag_untrusted(pres["name"])
+                pres["name"] = tag_untrusted(pres["name"])
         logger.info("list_presentations: found %d presentations", len(result))
         return json.dumps(result)
     except Exception as e:
-        return _handle_api_error(e, "list_presentations")
+        return handle_api_error(e, "list_presentations")
 
 
 def _read_presentation(service: GoogleSlidesService, presentation_id: str) -> str:
@@ -57,9 +54,7 @@ def _read_presentation(service: GoogleSlidesService, presentation_id: str) -> st
         result = service.read_presentation(presentation_id)
         logger.info("read_presentation: %s", presentation_id)
 
-        import secrets
-
-        result["title"] = _tag_untrusted(result.get("title", ""))
+        result["title"] = tag_untrusted(result.get("title", ""))
 
         boundary = secrets.token_hex(8)
         slides_text = []
@@ -68,11 +63,11 @@ def _read_presentation(service: GoogleSlidesService, presentation_id: str) -> st
             elements_text = []
             for element in slide.get("elements", []):
                 el_type = element.get("type", "UNKNOWN")
-                el_text = _tag_untrusted(element.get("text", ""))
+                el_text = tag_untrusted(element.get("text", ""))
                 elements_text.append(
                     f'  - {element["element_id"]} ({el_type}): "{el_text}"'
                 )
-            notes_text = _tag_untrusted(slide.get("speaker_notes", ""))
+            notes_text = tag_untrusted(slide.get("speaker_notes", ""))
 
             slide_content = (
                 f"Slide {slide['slide_number']} "
@@ -97,9 +92,9 @@ def _read_presentation(service: GoogleSlidesService, presentation_id: str) -> st
 
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "read_presentation")
+        return handle_api_error(e, "read_presentation")
 
 
 def _resolve_slides_template(
@@ -131,13 +126,13 @@ def _create_presentation(
         result = service.create_presentation(
             title, folder_id=folder_id or None, template_presentation_id=template_id
         )
-        result["name"] = _tag_untrusted(result["name"])
+        result["name"] = tag_untrusted(result["name"])
         logger.info("create_presentation: %s", result["id"])
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "create_presentation")
+        return handle_api_error(e, "create_presentation")
 
 
 def _add_slide(
@@ -149,7 +144,7 @@ def _add_slide(
     try:
         validate_presentation_id(presentation_id)
         if layout and len(layout) > 255:
-            return _error_response(
+            return error_response(
                 "Layout name exceeds 255 characters", "VALIDATION_ERROR"
             )
         if position >= 0:
@@ -160,9 +155,9 @@ def _add_slide(
         logger.info("add_slide: %s slide=%s", presentation_id, result["slide_id"])
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "add_slide")
+        return handle_api_error(e, "add_slide")
 
 
 def _delete_slide(
@@ -193,7 +188,7 @@ def _delete_slide(
             )
         else:
             if not nonce_manager.verify(nonce_key, nonce):
-                return _error_response(
+                return error_response(
                     "Invalid or expired nonce. Please restart the deletion process.",
                     "NONCE_ERROR",
                 )
@@ -201,9 +196,65 @@ def _delete_slide(
             logger.info("delete_slide: deleted %s/%s", presentation_id, slide_id)
             return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "delete_slide")
+        return handle_api_error(e, "delete_slide")
+
+
+def _delete_slides(
+    service: GoogleSlidesService,
+    nonce_manager: NonceManager,
+    presentation_id: str,
+    slide_ids: str,
+    nonce: str = "",
+) -> str:
+    try:
+        validate_presentation_id(presentation_id)
+        ids = [sid.strip() for sid in slide_ids.split(",") if sid.strip()]
+        if not ids:
+            return error_response("slide_ids cannot be empty", "VALIDATION_ERROR")
+        if len(ids) > 50:
+            return error_response(
+                "Cannot delete more than 50 slides at once", "VALIDATION_ERROR"
+            )
+        for sid in ids:
+            validate_slide_id(sid)
+        nonce_key = f"{presentation_id}:bulk:{','.join(sorted(ids))}"
+        if not nonce:
+            new_nonce = nonce_manager.create(nonce_key)
+            logger.info(
+                "delete_slides: nonce created for %s (%d slides)",
+                presentation_id,
+                len(ids),
+            )
+            return json.dumps(
+                {
+                    "presentation_id": presentation_id,
+                    "slide_ids": ids,
+                    "slide_count": len(ids),
+                    "status": "confirm_required",
+                    "nonce": new_nonce,
+                    "expires_in_seconds": 30,
+                    "message": f"Call delete_slides again with this nonce to confirm deletion of {len(ids)} slides.",
+                }
+            )
+        else:
+            if not nonce_manager.verify(nonce_key, nonce):
+                return error_response(
+                    "Invalid or expired nonce. Please restart the deletion process.",
+                    "NONCE_ERROR",
+                )
+            result = service.delete_slides(presentation_id, ids)
+            logger.info(
+                "delete_slides: deleted %d slides from %s",
+                len(ids),
+                presentation_id,
+            )
+            return json.dumps(result)
+    except ValueError as e:
+        return error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return handle_api_error(e, "delete_slides")
 
 
 def _update_slide_text(
@@ -227,9 +278,9 @@ def _update_slide_text(
         )
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "update_slide_text")
+        return handle_api_error(e, "update_slide_text")
 
 
 def _delete_shape(
@@ -260,7 +311,7 @@ def _delete_shape(
             )
         else:
             if not nonce_manager.verify(nonce_key, nonce):
-                return _error_response(
+                return error_response(
                     "Invalid or expired nonce. Please restart the deletion process.",
                     "NONCE_ERROR",
                 )
@@ -268,9 +319,9 @@ def _delete_shape(
             logger.info("delete_shape: deleted %s/%s", presentation_id, shape_id)
             return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "delete_shape")
+        return handle_api_error(e, "delete_shape")
 
 
 def _update_speaker_notes(
@@ -287,9 +338,9 @@ def _update_speaker_notes(
         logger.info("update_speaker_notes: %s slide=%s", presentation_id, slide_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "update_speaker_notes")
+        return handle_api_error(e, "update_speaker_notes")
 
 
 def _duplicate_slide(
@@ -311,9 +362,9 @@ def _duplicate_slide(
         )
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "duplicate_slide")
+        return handle_api_error(e, "duplicate_slide")
 
 
 def _reorder_slides(
@@ -326,11 +377,11 @@ def _reorder_slides(
         validate_presentation_id(presentation_id)
         ids = [sid.strip() for sid in slide_ids.split(",") if sid.strip()]
         if not ids:
-            return _error_response("slide_ids cannot be empty", "VALIDATION_ERROR")
+            return error_response("slide_ids cannot be empty", "VALIDATION_ERROR")
         for sid in ids:
             validate_slide_id(sid)
         if position < 0:
-            return _error_response("position must be >= 0", "VALIDATION_ERROR")
+            return error_response("position must be >= 0", "VALIDATION_ERROR")
         result = service.reorder_slides(presentation_id, ids, position)
         logger.info(
             "reorder_slides: %s %d slides to position %d",
@@ -340,9 +391,9 @@ def _reorder_slides(
         )
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "reorder_slides")
+        return handle_api_error(e, "reorder_slides")
 
 
 _VALID_ALIGNMENTS_SLIDES = frozenset({"START", "CENTER", "END", "JUSTIFIED"})
@@ -352,11 +403,11 @@ def _update_text_style(
     service: GoogleSlidesService,
     presentation_id: str,
     shape_id: str,
-    bold: str = "",
-    italic: str = "",
-    underline: str = "",
+    bold: bool | None = None,
+    italic: bool | None = None,
+    underline: bool | None = None,
     font_family: str = "",
-    font_size: float = -1,
+    font_size: float | None = None,
     foreground_color: str = "",
     alignment: str = "",
 ) -> str:
@@ -365,34 +416,22 @@ def _update_text_style(
         validate_shape_id(shape_id)
 
         kwargs: dict = {}
-        if bold:
-            if bold.lower() not in ("true", "false"):
-                return _error_response(
-                    "bold must be 'true' or 'false'", "VALIDATION_ERROR"
-                )
-            kwargs["bold"] = bold.lower() == "true"
-        if italic:
-            if italic.lower() not in ("true", "false"):
-                return _error_response(
-                    "italic must be 'true' or 'false'", "VALIDATION_ERROR"
-                )
-            kwargs["italic"] = italic.lower() == "true"
-        if underline:
-            if underline.lower() not in ("true", "false"):
-                return _error_response(
-                    "underline must be 'true' or 'false'", "VALIDATION_ERROR"
-                )
-            kwargs["underline"] = underline.lower() == "true"
+        if bold is not None:
+            kwargs["bold"] = bold
+        if italic is not None:
+            kwargs["italic"] = italic
+        if underline is not None:
+            kwargs["underline"] = underline
         if font_family:
             if len(font_family) > 255:
-                return _error_response(
+                return error_response(
                     "font_family exceeds 255 characters", "VALIDATION_ERROR"
                 )
             kwargs["font_family"] = font_family
-        if font_size >= 0:
+        if font_size is not None:
             if font_size <= 0 or font_size > 1000:
-                return _error_response(
-                    "font_size must be between 0 and 1000 PT", "VALIDATION_ERROR"
+                return error_response(
+                    "font_size must be between 1 and 1000 PT", "VALIDATION_ERROR"
                 )
             kwargs["font_size"] = font_size
         if foreground_color:
@@ -400,14 +439,14 @@ def _update_text_style(
             kwargs["foreground_color_rgb"] = foreground_color
         if alignment:
             if alignment.upper() not in _VALID_ALIGNMENTS_SLIDES:
-                return _error_response(
+                return error_response(
                     f"alignment must be one of: {', '.join(sorted(_VALID_ALIGNMENTS_SLIDES))}",
                     "VALIDATION_ERROR",
                 )
             kwargs["alignment"] = alignment.upper()
 
         if not kwargs:
-            return _error_response(
+            return error_response(
                 "At least one style property must be specified", "VALIDATION_ERROR"
             )
 
@@ -415,9 +454,9 @@ def _update_text_style(
         logger.info("update_text_style: %s shape=%s", presentation_id, shape_id)
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "update_text_style")
+        return handle_api_error(e, "update_text_style")
 
 
 def _convert_markdown_to_slides(
@@ -436,7 +475,7 @@ def _convert_markdown_to_slides(
 
         slide_dicts = markdown_to_slide_dicts(markdown_content)
         if not slide_dicts:
-            return _error_response(
+            return error_response(
                 "No slides found in markdown content", "VALIDATION_ERROR"
             )
 
@@ -447,7 +486,7 @@ def _convert_markdown_to_slides(
             folder_id=folder_id or None,
             template_presentation_id=template_id,
         )
-        result["name"] = _tag_untrusted(result["name"])
+        result["name"] = tag_untrusted(result["name"])
         logger.info(
             "convert_markdown_to_slides: %s (%d slides)",
             result["id"],
@@ -455,9 +494,9 @@ def _convert_markdown_to_slides(
         )
         return json.dumps(result)
     except ValueError as e:
-        return _error_response(str(e), "VALIDATION_ERROR")
+        return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
-        return _handle_api_error(e, "convert_markdown_to_slides")
+        return handle_api_error(e, "convert_markdown_to_slides")
 
 
 def register_google_slides_tools(
@@ -496,6 +535,11 @@ def register_google_slides_tools(
         return _delete_slide(service, nonce_manager, presentation_id, slide_id, nonce)
 
     @mcp.tool()
+    def delete_slides(presentation_id: str, slide_ids: str, nonce: str = "") -> str:
+        """Delete multiple slides at once. slide_ids is comma-separated. Requires two-step nonce confirmation. IMPORTANT: Always confirm with the user before completing the second step, showing the list of slides to be deleted."""
+        return _delete_slides(service, nonce_manager, presentation_id, slide_ids, nonce)
+
+    @mcp.tool()
     def update_slide_text(
         presentation_id: str, slide_id: str, shape_id: str, content: str
     ) -> str:
@@ -526,15 +570,15 @@ def register_google_slides_tools(
     def update_slide_text_style(
         presentation_id: str,
         shape_id: str,
-        bold: str = "",
-        italic: str = "",
-        underline: str = "",
+        bold: bool | None = None,
+        italic: bool | None = None,
+        underline: bool | None = None,
         font_family: str = "",
-        font_size: float = -1,
+        font_size: float | None = None,
         foreground_color: str = "",
         alignment: str = "",
     ) -> str:
-        """Style all text in a shape without replacing content. Set bold/italic/underline ('true'/'false'), font_family, font_size (PT), foreground_color ('#RRGGBB'), alignment (START/CENTER/END/JUSTIFIED). At least one property required."""
+        """Style all text in a shape without replacing content. Set bold/italic/underline (true/false), font_family, font_size (PT), foreground_color ('#RRGGBB'), alignment (START/CENTER/END/JUSTIFIED). At least one property required."""
         return _update_text_style(
             service,
             presentation_id,

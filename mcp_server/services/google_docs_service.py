@@ -20,22 +20,38 @@ class GoogleDocsService:
         self.docs_service = build("docs", "v1", credentials=credentials)
 
     @staticmethod
-    def _extract_body_content(body):
-        """Extract text content from a document body.
+    def _extract_paragraph_text(paragraph):
+        """Extract text from a single paragraph element."""
+        parts = []
+        for element in paragraph.get("elements", []):
+            if "textRun" in element:
+                parts.append(element["textRun"].get("content", ""))
+        return "".join(parts)
 
-        Args:
-            body: Document body dict from the API response
-
-        Returns:
-            Concatenated text content string
-        """
-        content_parts = []
-        for item in body.get("content", []):
+    @staticmethod
+    def _extract_content_items(content_list):
+        """Extract text from a content list, recursing into tables."""
+        parts = []
+        for item in content_list:
             if "paragraph" in item:
-                for element in item["paragraph"].get("elements", []):
-                    if "textRun" in element:
-                        content_parts.append(element["textRun"].get("content", ""))
-        return "".join(content_parts)
+                parts.append(
+                    GoogleDocsService._extract_paragraph_text(item["paragraph"])
+                )
+            elif "table" in item:
+                for row in item["table"].get("tableRows", []):
+                    cell_texts = []
+                    for cell in row.get("tableCells", []):
+                        cell_content = GoogleDocsService._extract_content_items(
+                            cell.get("content", [])
+                        )
+                        cell_texts.append(cell_content.strip())
+                    parts.append("\t".join(cell_texts) + "\n")
+        return "".join(parts)
+
+    @staticmethod
+    def _extract_body_content(body):
+        """Extract text content from a document body, including tables."""
+        return GoogleDocsService._extract_content_items(body.get("content", []))
 
     @staticmethod
     def _flatten_tabs(tabs):
@@ -91,8 +107,37 @@ class GoogleDocsService:
         raise ValueError(f"Tab '{tab_id}' not found in document")
 
     @staticmethod
+    def _get_body_content(doc_response, tab_id=None):
+        """Extract raw body content list from a document API response."""
+        if tab_id:
+            for tab in doc_response.get("tabs", []):
+                found = GoogleDocsService._find_tab_recursive(tab, tab_id)
+                if found:
+                    return (
+                        found.get("documentTab", {}).get("body", {}).get("content", [])
+                    )
+            raise ValueError(f"Tab '{tab_id}' not found")
+        tabs = doc_response.get("tabs", [])
+        if tabs:
+            return tabs[0].get("documentTab", {}).get("body", {}).get("content", [])
+        return doc_response.get("body", {}).get("content", [])
+
+    @staticmethod
     def _retry_on_429(fn, max_retries=3):
         return retry_on_429(fn, max_retries)
+
+    def get_document_body_content(self, doc_id, tab_id=None):
+        """Get the raw body content list for structural operations like table manipulation."""
+
+        def _get():
+            response = (
+                self.docs_service.documents()
+                .get(documentId=doc_id, includeTabsContent=True)
+                .execute()
+            )
+            return self._get_body_content(response, tab_id)
+
+        return self._retry_on_429(_get)
 
     def list_documents(self, query=None, max_results=10):
         """List Google Docs documents.
@@ -106,8 +151,10 @@ class GoogleDocsService:
         """
 
         def _list():
-            # Build the query
-            q_parts = ["mimeType='application/vnd.google-apps.document'"]
+            q_parts = [
+                "mimeType='application/vnd.google-apps.document'",
+                "trashed=false",
+            ]
             if query:
                 sanitized = sanitize_query(query)
                 q_parts.append(f"name contains '{sanitized}'")
@@ -120,6 +167,7 @@ class GoogleDocsService:
                     q=q,
                     pageSize=max_results,
                     fields="files(id,name,createdTime,modifiedTime)",
+                    orderBy="modifiedTime desc",
                 )
                 .execute()
             )
@@ -138,8 +186,38 @@ class GoogleDocsService:
 
         return self._retry_on_429(_list)
 
+    _NATIVE_DOC_MIME = "application/vnd.google-apps.document"
+
+    def _get_file_metadata(self, file_id):
+        """Get file metadata including MIME type and name."""
+
+        def _get():
+            return (
+                self.drive_service.files()
+                .get(fileId=file_id, fields="id,name,mimeType")
+                .execute()
+            )
+
+        return self._retry_on_429(_get)
+
+    def _export_as_text(self, file_id):
+        """Export a Google Drive file as plain text."""
+
+        def _export():
+            return (
+                self.drive_service.files()
+                .export(fileId=file_id, mimeType="text/plain")
+                .execute()
+            )
+
+        return self._retry_on_429(_export)
+
     def read_document(self, doc_id):
         """Read the content of a Google Doc, including all tabs.
+
+        For native Google Docs, uses the Docs API to read structured content
+        with tab support. For uploaded files (.docx, .pdf, etc.), exports
+        as plain text via Drive API.
 
         Args:
             doc_id: The document ID
@@ -153,6 +231,21 @@ class GoogleDocsService:
         """
 
         def _read():
+            meta = self._get_file_metadata(doc_id)
+            mime = meta.get("mimeType", "")
+
+            if mime != self._NATIVE_DOC_MIME:
+                content = self._export_as_text(doc_id)
+                if isinstance(content, bytes):
+                    content = content.decode("utf-8")
+                return {
+                    "id": doc_id,
+                    "title": meta.get("name", ""),
+                    "content": content,
+                    "format": "exported",
+                    "original_mime_type": mime,
+                }
+
             response = (
                 self.docs_service.documents()
                 .get(documentId=doc_id, includeTabsContent=True)
@@ -164,7 +257,6 @@ class GoogleDocsService:
             if tabs:
                 content = tabs[0]["content"]
             else:
-                # Fallback for docs without tabs info
                 content = self._extract_body_content(response.get("body", {}))
 
             result = {
@@ -817,6 +909,73 @@ class GoogleDocsService:
             return self.docs_service.documents().get(documentId=doc_id).execute()
 
         return self._retry_on_429(_get_styles)
+
+    def update_tab_diff(self, doc_id, tab_id, blocks, batch_requests):
+        """Update tab content using diff to preserve comment anchors.
+
+        Compares current tab content against new blocks at the paragraph level.
+        Only changed regions are deleted and re-inserted, preserving comments
+        on unchanged text. Falls back to full replacement if nothing matches.
+
+        Args:
+            doc_id: The document ID
+            tab_id: The tab ID to update
+            blocks: Parsed markdown blocks from parse_markdown()
+            batch_requests: Pre-built requests from blocks_to_batch_requests()
+                (used as fallback when diff finds no common content)
+
+        Returns:
+            Dictionary with id, name, url, updatedTime, and diff_used flag
+        """
+        from mcp_server.services.diff_updater import compute_diff_requests
+
+        def _update():
+            doc = (
+                self.docs_service.documents()
+                .get(documentId=doc_id, includeTabsContent=True)
+                .execute()
+            )
+
+            requests = compute_diff_requests(doc, tab_id, blocks)
+            used_diff = requests is not None
+
+            if requests is None:
+                end_index = self._get_tab_end_index(doc, tab_id)
+                requests = []
+                if end_index > 2:
+                    requests.append(
+                        {
+                            "deleteContentRange": {
+                                "range": {
+                                    "startIndex": 1,
+                                    "endIndex": end_index - 1,
+                                    "tabId": tab_id,
+                                }
+                            }
+                        }
+                    )
+                requests.extend(batch_requests)
+
+            if requests:
+                self.docs_service.documents().batchUpdate(
+                    documentId=doc_id, body={"requests": requests}
+                ).execute()
+
+            file_metadata = (
+                self.drive_service.files()
+                .get(fileId=doc_id, fields="id,name,modifiedTime")
+                .execute()
+            )
+
+            return {
+                "id": file_metadata["id"],
+                "name": file_metadata["name"],
+                "url": f"https://docs.google.com/document/d/{doc_id}/edit",
+                "updatedTime": file_metadata.get("modifiedTime"),
+                "diff_used": used_diff,
+            }
+
+        return self._retry_on_429(_update)
 
     def update_tab_styled(self, doc_id, tab_id, batch_requests):
         """Clear a tab and apply styled content via batchUpdate.
