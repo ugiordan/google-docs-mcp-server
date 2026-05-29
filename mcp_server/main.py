@@ -42,6 +42,9 @@ logger = logging.getLogger("google-docs-mcp")
 def create_server() -> FastMCP:
     """Create and configure the MCP server."""
     # Load configuration
+    credentials_path = os.environ.get(
+        "GOOGLE_CREDENTIALS_PATH", "/app/credentials.json"
+    )
     token_path = os.environ.get("GOOGLE_TOKEN_PATH", "/app/tokens.json")
     templates_path = os.environ.get("GOOGLE_TEMPLATES_PATH", "/app/templates.yaml")
 
@@ -74,7 +77,14 @@ def create_server() -> FastMCP:
     # Register tools
     if service:
         slides_service = GoogleSlidesService(creds)
-        register_google_docs_tools(mcp, service, nonce_manager, template_config)
+        register_google_docs_tools(
+            mcp,
+            service,
+            nonce_manager,
+            template_config,
+            credentials_path=credentials_path,
+            token_path=token_path,
+        )
         register_google_slides_tools(
             mcp, slides_service, nonce_manager, slides_template_config
         )

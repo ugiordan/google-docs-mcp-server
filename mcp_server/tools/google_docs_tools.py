@@ -5,6 +5,11 @@ import json
 import logging
 import os
 import secrets
+import threading
+from urllib.parse import parse_qs
+from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 from mcp_server.config import TemplateConfig
 from mcp_server.nonce import NonceManager
@@ -1104,11 +1109,97 @@ def _insert_table_rows(
         return handle_api_error(e, "insert_table_rows")
 
 
+def _re_authenticate(credentials_path: str, token_path: str) -> str:
+    """Start OAuth re-authentication flow in the background."""
+    from mcp_server.auth import SCOPES, save_tokens
+
+    try:
+        flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
+        flow.redirect_uri = "http://localhost:8080/"
+        auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent")
+
+        class _QuietHandler(WSGIRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+        auth_result = {}
+
+        def _callback_app(environ, start_response):
+            query = parse_qs(environ.get("QUERY_STRING", ""))
+            code = query.get("code", [None])[0]
+            if code:
+                auth_result["code"] = code
+                start_response("200 OK", [("Content-Type", "text/html")])
+                return [
+                    b"<html><body><h2>Authentication successful!</h2>"
+                    b"<p>You can close this tab and reconnect the MCP server.</p>"
+                    b"</body></html>"
+                ]
+            error = query.get("error", ["unknown"])[0]
+            auth_result["error"] = error
+            start_response("400 Bad Request", [("Content-Type", "text/html")])
+            return [b"<html><body><h2>Authentication failed.</h2></body></html>"]
+
+        try:
+            server = make_server(
+                "0.0.0.0",
+                8080,
+                _callback_app,
+                handler_class=_QuietHandler,  # nosec B104
+            )
+        except OSError as e:
+            return error_response(
+                f"Cannot start auth server on port 8080: {e}. "
+                "A previous auth attempt may still be running.",
+                "PORT_IN_USE",
+            )
+        server.timeout = 120
+
+        def _worker():
+            try:
+                server.handle_request()
+                if "code" in auth_result:
+                    flow.fetch_token(code=auth_result["code"])
+                    save_tokens(flow.credentials, token_path)
+                    logger.info("Re-authentication successful")
+                else:
+                    logger.error("Auth failed: %s", auth_result.get("error", "unknown"))
+            except Exception as e:
+                logger.error("Auth flow error: %s", e)
+            finally:
+                server.server_close()
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        return json.dumps(
+            {
+                "status": "auth_started",
+                "auth_url": auth_url,
+                "message": (
+                    "Open auth_url in your browser and sign in with the "
+                    "Google account you want to use. After authorization, "
+                    "reconnect the MCP server (/mcp) to pick up the new credentials."
+                ),
+                "timeout_seconds": 120,
+            }
+        )
+    except FileNotFoundError:
+        return error_response(
+            "credentials.json not found. Mount it into the container.",
+            "CONFIG_ERROR",
+        )
+    except Exception as e:
+        return handle_api_error(e, "re_authenticate")
+
+
 def register_google_docs_tools(
     mcp,
     service: GoogleDocsService,
     nonce_manager: NonceManager,
     template_config: TemplateConfig,
+    credentials_path: str = "/app/credentials.json",  # nosec B107
+    token_path: str = "/app/tokens.json",  # nosec B107
 ):
     """Register all Google Docs tools on the MCP server."""
 
@@ -1291,3 +1382,8 @@ def register_google_docs_tools(
         return _insert_table_rows(
             service, document_id, table_index, after_row, rows, tab_id
         )
+
+    @mcp.tool()
+    def re_authenticate() -> str:
+        """Start OAuth re-authentication flow. Returns an auth URL to open in your browser. Use this to switch Google accounts or refresh expired credentials. After authorizing, reconnect the MCP server (/mcp) to pick up the new credentials."""
+        return _re_authenticate(credentials_path, token_path)

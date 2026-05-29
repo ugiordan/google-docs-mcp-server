@@ -322,6 +322,7 @@ uv run python main.py --revoke  # revoke tokens
 - **In-memory nonces**: delete nonces are lost on server restart. If the server restarts between the two delete steps, re-initiate the deletion.
 - **Template style limits**: only heading/body fonts, sizes, spacing, and colors are copied. Complex layouts (columns, page breaks, headers/footers) are not supported.
 - **Comment restoration**: full-document updates save and restore comments on a best-effort basis. Comments whose quoted text no longer exists in the new content cannot be re-anchored.
+- **Comments have no tab association**: the Google Docs Comments API does not return a `tabId`. In multi-tab documents, comment-to-tab matching relies on quoted text comparison, which is unreliable if the same text appears in multiple tabs.
 
 ## Troubleshooting
 

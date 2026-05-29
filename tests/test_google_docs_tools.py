@@ -2530,3 +2530,81 @@ class TestInsertTableRows:
         rows = json.dumps([["a"]])
         result = json.loads(_insert_table_rows(service, "doc1234567890", 0, 0, rows))
         assert result["code"] == "API_ERROR"
+
+
+class TestReAuthenticate:
+    @patch("mcp_server.tools.google_docs_tools.InstalledAppFlow", create=True)
+    def test_returns_auth_url(self, mock_flow_cls, tmp_path):
+        from mcp_server.tools.google_docs_tools import _re_authenticate
+
+        creds_file = tmp_path / "credentials.json"
+        creds_file.write_text(
+            json.dumps(
+                {
+                    "installed": {
+                        "client_id": "test.apps.googleusercontent.com",
+                        "client_secret": "secret",
+                        "redirect_uris": ["http://localhost"],
+                    }
+                }
+            )
+        )
+        token_file = tmp_path / "tokens.json"
+
+        mock_flow = MagicMock()
+        mock_flow.authorization_url.return_value = (
+            "https://accounts.google.com/o/oauth2/auth?client_id=test",
+            "state123",
+        )
+        mock_flow_cls.from_client_secrets_file.return_value = mock_flow
+
+        with patch(
+            "mcp_server.tools.google_docs_tools.make_server"
+        ) as mock_make_server:
+            mock_server = MagicMock()
+            mock_make_server.return_value = mock_server
+
+            result = json.loads(_re_authenticate(str(creds_file), str(token_file)))
+
+        assert result["status"] == "auth_started"
+        assert "accounts.google.com" in result["auth_url"]
+        assert result["timeout_seconds"] == 120
+        mock_flow.authorization_url.assert_called_once_with(
+            access_type="offline", prompt="consent"
+        )
+
+    def test_missing_credentials_file(self, tmp_path):
+        from mcp_server.tools.google_docs_tools import _re_authenticate
+
+        result = json.loads(
+            _re_authenticate(
+                str(tmp_path / "nonexistent.json"),
+                str(tmp_path / "tokens.json"),
+            )
+        )
+        assert result["code"] == "CONFIG_ERROR"
+        assert "credentials.json" in result["error"]
+
+    @patch("mcp_server.tools.google_docs_tools.InstalledAppFlow", create=True)
+    def test_port_in_use(self, mock_flow_cls, tmp_path):
+        from mcp_server.tools.google_docs_tools import _re_authenticate
+
+        creds_file = tmp_path / "credentials.json"
+        creds_file.write_text(
+            '{"installed": {"client_id": "x", "client_secret": "y", "redirect_uris": ["http://localhost"]}}'
+        )
+
+        mock_flow = MagicMock()
+        mock_flow.authorization_url.return_value = ("https://example.com", "s")
+        mock_flow_cls.from_client_secrets_file.return_value = mock_flow
+
+        with patch(
+            "mcp_server.tools.google_docs_tools.make_server",
+            side_effect=OSError("Address already in use"),
+        ):
+            result = json.loads(
+                _re_authenticate(str(creds_file), str(tmp_path / "tokens.json"))
+            )
+
+        assert result["code"] == "PORT_IN_USE"
+        assert "8080" in result["error"]

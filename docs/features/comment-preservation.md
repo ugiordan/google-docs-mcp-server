@@ -38,6 +38,14 @@ This is a best-effort approach. Comments whose quoted text no longer exists in t
 | `update_document` in replace mode | Save/restore | Best-effort re-creation |
 | `update_document` in append mode | N/A | Existing content untouched |
 
+## Known Limitations
+
+### Comments Have No Tab Association
+
+The Google Docs Comments API does not include a `tabId` field on comments. There is no reliable way to determine which tab a comment belongs to. The server matches comments to tabs by comparing `quotedFileContent` against each tab's text, but this is fragile: if the same text appears in multiple tabs, the comment may be restored to the wrong one.
+
+This affects the save/restore flow on multi-tab documents. Diff-based tab updates are not affected since they preserve comments in place rather than re-creating them.
+
 ## Response Fields
 
 When diff-based updates are used, the response includes `diff_used: true`.
