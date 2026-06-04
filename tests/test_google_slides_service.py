@@ -1113,3 +1113,169 @@ class TestUpdateTextStyle:
         assert "bold" in fields
         assert "italic" in fields
         assert "underline" in fields
+
+
+class TestCreateShape:
+    def test_creates_basic_shape(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.create_shape("pres123", "slide1", "RECTANGLE", 100, 200, 300, 150)
+        assert result["shape_id"].startswith("shape_")
+        assert result["shape_type"] == "RECTANGLE"
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        body = call_args[1]["body"]
+        reqs = body["requests"]
+        assert len(reqs) == 1
+        create = reqs[0]["createShape"]
+        assert create["shapeType"] == "RECTANGLE"
+        transform = create["elementProperties"]["transform"]
+        assert transform["translateX"] == 100 * 12700
+        assert transform["translateY"] == 200 * 12700
+
+    def test_creates_shape_with_fill_and_border(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.create_shape(
+            "pres123",
+            "slide1",
+            "ELLIPSE",
+            0,
+            0,
+            100,
+            100,
+            fill_color="#FF0000",
+            border_color="#000000",
+            border_weight=2.0,
+        )
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        assert len(reqs) == 2
+        update = reqs[1]["updateShapeProperties"]
+        fill = update["shapeProperties"]["shapeBackgroundFill"]["solidFill"]["color"][
+            "rgbColor"
+        ]
+        assert fill["red"] == pytest.approx(1.0)
+        assert fill["green"] == pytest.approx(0.0)
+        outline = update["shapeProperties"]["outline"]
+        assert outline["weight"]["magnitude"] == 2.0
+
+    def test_creates_shape_with_text(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.create_shape("pres123", "slide1", "TEXT_BOX", 0, 0, 200, 50, text="Hello")
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        assert len(reqs) == 2
+        insert = reqs[1]["insertText"]
+        assert insert["text"] == "Hello"
+        assert insert["insertionIndex"] == 0
+
+    def test_all_options(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.create_shape(
+            "pres123",
+            "slide1",
+            "RECTANGLE",
+            10,
+            20,
+            300,
+            150,
+            text="Box",
+            fill_color="#0000FF",
+            border_color="#FFFFFF",
+            border_weight=1.0,
+        )
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        assert len(reqs) == 3
+        assert "createShape" in reqs[0]
+        assert "updateShapeProperties" in reqs[1]
+        assert "insertText" in reqs[2]
+
+    def test_no_optional_params(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.create_shape("pres123", "slide1", "DIAMOND", 0, 0, 50, 50)
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        assert len(reqs) == 1
+        assert "createShape" in reqs[0]
+
+
+class TestCreateLine:
+    def test_creates_basic_line(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        result = svc.create_line("pres123", "slide1", 10, 20, 200, 100)
+        assert result["line_id"].startswith("line_")
+        assert result["line_category"] == "STRAIGHT"
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        assert len(reqs) == 1
+        create = reqs[0]["createLine"]
+        assert create["lineCategory"] == "STRAIGHT"
+        transform = create["elementProperties"]["transform"]
+        assert transform["translateX"] == 10 * 12700
+        assert transform["scaleX"] == 1
+
+    def test_creates_line_with_arrows(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.create_line(
+            "pres123",
+            "slide1",
+            0,
+            0,
+            100,
+            100,
+            start_arrow="NONE",
+            end_arrow="OPEN_ARROW",
+        )
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        assert len(reqs) == 2
+        line_props = reqs[1]["updateLineProperties"]["lineProperties"]
+        assert line_props["startArrow"] == "NONE"
+        assert line_props["endArrow"] == "OPEN_ARROW"
+
+    def test_creates_line_with_color_and_weight(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.create_line(
+            "pres123",
+            "slide1",
+            0,
+            0,
+            100,
+            0,
+            color="#00FF00",
+            weight=3.0,
+        )
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        line_props = reqs[1]["updateLineProperties"]["lineProperties"]
+        color = line_props["lineFill"]["solidFill"]["color"]["rgbColor"]
+        assert color["green"] == pytest.approx(1.0)
+        assert line_props["weight"]["magnitude"] == 3.0
+
+    def test_reversed_direction(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.create_line("pres123", "slide1", 200, 100, 50, 300)
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        create = reqs[0]["createLine"]
+        transform = create["elementProperties"]["transform"]
+        assert transform["scaleX"] == -1
+        assert transform["scaleY"] == 1
+        assert transform["translateX"] == 200 * 12700
+
+    def test_no_optional_params(self):
+        svc, mock_slides, _ = _make_service()
+        mock_slides.presentations().batchUpdate().execute.return_value = {}
+        svc.create_line("pres123", "slide1", 0, 0, 100, 100)
+        call_args = mock_slides.presentations().batchUpdate.call_args
+        reqs = call_args[1]["body"]["requests"]
+        assert len(reqs) == 1
+        assert "createLine" in reqs[0]

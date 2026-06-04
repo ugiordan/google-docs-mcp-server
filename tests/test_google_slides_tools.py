@@ -11,7 +11,9 @@ from mcp_server.tools.common import error_response, handle_api_error, tag_untrus
 from mcp_server.tools.google_slides_tools import (
     _add_slide,
     _convert_markdown_to_slides,
+    _create_line,
     _create_presentation,
+    _create_shape,
     _delete_shape,
     _delete_slide,
     _delete_slides,
@@ -912,4 +914,361 @@ class TestUpdateTextStyle:
         svc = _mock_service()
         svc.update_text_style.side_effect = Exception("API failure")
         result = json.loads(_update_text_style(svc, "pres1234567", "s1", bold=True))
+        assert result["code"] == "API_ERROR"
+
+
+_PRES_ID = "pres1234567"
+_SLIDE_ID = "slide_abc123"
+
+
+class TestCreateShape:
+    def test_success_minimal(self):
+        svc = _mock_service()
+        svc.create_shape.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "shape_id": "shape_abc123",
+            "shape_type": "RECTANGLE",
+        }
+        result = json.loads(
+            _create_shape(svc, _PRES_ID, _SLIDE_ID, "RECTANGLE", 10, 20, 100, 50)
+        )
+        assert result["shape_id"] == "shape_abc123"
+        assert result["shape_type"] == "RECTANGLE"
+        svc.create_shape.assert_called_once()
+
+    def test_success_with_text(self):
+        svc = _mock_service()
+        svc.create_shape.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "shape_id": "shape_x",
+            "shape_type": "TEXT_BOX",
+        }
+        _create_shape(
+            svc, _PRES_ID, _SLIDE_ID, "text_box", 0, 0, 200, 100, text="Hello"
+        )
+        kwargs = svc.create_shape.call_args
+        assert kwargs[1]["text"] == "Hello"
+
+    def test_success_with_fill_and_border(self):
+        svc = _mock_service()
+        svc.create_shape.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "shape_id": "shape_x",
+            "shape_type": "ELLIPSE",
+        }
+        _create_shape(
+            svc,
+            _PRES_ID,
+            _SLIDE_ID,
+            "ellipse",
+            0,
+            0,
+            100,
+            100,
+            fill_color="#FF0000",
+            border_color="#000000",
+            border_weight=2.0,
+        )
+        kwargs = svc.create_shape.call_args
+        assert kwargs[1]["fill_color"] == "#FF0000"
+        assert kwargs[1]["border_color"] == "#000000"
+        assert kwargs[1]["border_weight"] == 2.0
+
+    def test_shape_type_case_insensitive(self):
+        svc = _mock_service()
+        svc.create_shape.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "shape_id": "shape_x",
+            "shape_type": "RECTANGLE",
+        }
+        result = json.loads(
+            _create_shape(svc, _PRES_ID, _SLIDE_ID, "rectangle", 0, 0, 100, 50)
+        )
+        assert "shape_id" in result
+        assert svc.create_shape.call_args[0][2] == "RECTANGLE"
+
+    def test_invalid_presentation_id(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(svc, "bad", _SLIDE_ID, "RECTANGLE", 0, 0, 100, 50)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_slide_id(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(svc, _PRES_ID, "", "RECTANGLE", 0, 0, 100, 50)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_shape_type(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(svc, _PRES_ID, _SLIDE_ID, "INVALID", 0, 0, 100, 50)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "shape_type" in result["error"]
+
+    def test_zero_width(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(svc, _PRES_ID, _SLIDE_ID, "RECTANGLE", 0, 0, 0, 50)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "positive" in result["error"]
+
+    def test_negative_height(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(svc, _PRES_ID, _SLIDE_ID, "RECTANGLE", 0, 0, 100, -10)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_negative_x(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(svc, _PRES_ID, _SLIDE_ID, "RECTANGLE", -5, 0, 100, 50)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_fill_color(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(
+                svc,
+                _PRES_ID,
+                _SLIDE_ID,
+                "RECTANGLE",
+                0,
+                0,
+                100,
+                50,
+                fill_color="red",
+            )
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_border_color(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(
+                svc,
+                _PRES_ID,
+                _SLIDE_ID,
+                "RECTANGLE",
+                0,
+                0,
+                100,
+                50,
+                border_color="xyz",
+            )
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_border_weight_too_large(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_shape(
+                svc,
+                _PRES_ID,
+                _SLIDE_ID,
+                "RECTANGLE",
+                0,
+                0,
+                100,
+                50,
+                border_weight=51,
+            )
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_api_error(self):
+        svc = _mock_service()
+        svc.create_shape.side_effect = Exception("API failure")
+        result = json.loads(
+            _create_shape(svc, _PRES_ID, _SLIDE_ID, "RECTANGLE", 0, 0, 100, 50)
+        )
+        assert result["code"] == "API_ERROR"
+
+
+class TestCreateLine:
+    def test_success_minimal(self):
+        svc = _mock_service()
+        svc.create_line.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "line_id": "line_abc123",
+            "line_category": "STRAIGHT",
+        }
+        result = json.loads(_create_line(svc, _PRES_ID, _SLIDE_ID, 10, 20, 200, 100))
+        assert result["line_id"] == "line_abc123"
+        assert result["line_category"] == "STRAIGHT"
+
+    def test_success_with_arrows(self):
+        svc = _mock_service()
+        svc.create_line.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "line_id": "line_x",
+            "line_category": "STRAIGHT",
+        }
+        _create_line(
+            svc,
+            _PRES_ID,
+            _SLIDE_ID,
+            0,
+            0,
+            100,
+            100,
+            start_arrow="NONE",
+            end_arrow="OPEN_ARROW",
+        )
+        kwargs = svc.create_line.call_args
+        assert (
+            kwargs[1]["start_arrow"] is None or kwargs[1]["end_arrow"] == "OPEN_ARROW"
+        )
+
+    def test_success_with_color_and_weight(self):
+        svc = _mock_service()
+        svc.create_line.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "line_id": "line_x",
+            "line_category": "CURVED",
+        }
+        _create_line(
+            svc,
+            _PRES_ID,
+            _SLIDE_ID,
+            0,
+            0,
+            100,
+            0,
+            line_category="curved",
+            color="#00FF00",
+            weight=3.0,
+        )
+        kwargs = svc.create_line.call_args
+        assert kwargs[1]["color"] == "#00FF00"
+        assert kwargs[1]["weight"] == 3.0
+
+    def test_line_category_case_insensitive(self):
+        svc = _mock_service()
+        svc.create_line.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "line_id": "line_x",
+            "line_category": "BENT",
+        }
+        result = json.loads(
+            _create_line(svc, _PRES_ID, _SLIDE_ID, 0, 0, 100, 50, line_category="bent")
+        )
+        assert "line_id" in result
+
+    def test_invalid_presentation_id(self):
+        svc = _mock_service()
+        result = json.loads(_create_line(svc, "bad", _SLIDE_ID, 0, 0, 100, 100))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_slide_id(self):
+        svc = _mock_service()
+        result = json.loads(_create_line(svc, _PRES_ID, "", 0, 0, 100, 100))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_line_category(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_line(
+                svc, _PRES_ID, _SLIDE_ID, 0, 0, 100, 100, line_category="ZIGZAG"
+            )
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_zero_length_line(self):
+        svc = _mock_service()
+        result = json.loads(_create_line(svc, _PRES_ID, _SLIDE_ID, 50, 50, 50, 50))
+        assert result["code"] == "VALIDATION_ERROR"
+        assert "length" in result["error"]
+
+    def test_negative_coordinate(self):
+        svc = _mock_service()
+        result = json.loads(_create_line(svc, _PRES_ID, _SLIDE_ID, -10, 0, 100, 100))
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_start_arrow(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_line(
+                svc,
+                _PRES_ID,
+                _SLIDE_ID,
+                0,
+                0,
+                100,
+                100,
+                start_arrow="BAD_ARROW",
+            )
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_invalid_end_arrow(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_line(
+                svc,
+                _PRES_ID,
+                _SLIDE_ID,
+                0,
+                0,
+                100,
+                100,
+                end_arrow="INVALID",
+            )
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_arrow_case_insensitive(self):
+        svc = _mock_service()
+        svc.create_line.return_value = {
+            "presentation_id": _PRES_ID,
+            "slide_id": _SLIDE_ID,
+            "line_id": "line_x",
+            "line_category": "STRAIGHT",
+        }
+        result = json.loads(
+            _create_line(
+                svc,
+                _PRES_ID,
+                _SLIDE_ID,
+                0,
+                0,
+                100,
+                100,
+                end_arrow="open_arrow",
+            )
+        )
+        assert "line_id" in result
+
+    def test_invalid_color(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_line(svc, _PRES_ID, _SLIDE_ID, 0, 0, 100, 100, color="not_hex")
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_weight_too_large(self):
+        svc = _mock_service()
+        result = json.loads(
+            _create_line(svc, _PRES_ID, _SLIDE_ID, 0, 0, 100, 100, weight=51)
+        )
+        assert result["code"] == "VALIDATION_ERROR"
+
+    def test_api_error(self):
+        svc = _mock_service()
+        svc.create_line.side_effect = Exception("API failure")
+        result = json.loads(_create_line(svc, _PRES_ID, _SLIDE_ID, 0, 0, 100, 100))
         assert result["code"] == "API_ERROR"

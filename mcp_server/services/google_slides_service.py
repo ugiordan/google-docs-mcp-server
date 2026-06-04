@@ -5,6 +5,8 @@ from googleapiclient.discovery import build
 from mcp_server.utils.retry import retry_on_429
 from mcp_server.validation import sanitize_query
 
+_PT_TO_EMU = 12700
+
 
 class GoogleSlidesService:
     """Service layer for Google Slides and Drive API operations."""
@@ -417,6 +419,191 @@ class GoogleSlidesService:
             }
 
         return retry_on_429(_delete)
+
+    def create_shape(
+        self,
+        presentation_id,
+        slide_id,
+        shape_type,
+        x,
+        y,
+        width,
+        height,
+        text=None,
+        fill_color=None,
+        border_color=None,
+        border_weight=None,
+    ):
+        import secrets
+
+        from mcp_server.tools.common import parse_hex_color
+
+        def _create():
+            object_id = f"shape_{secrets.token_hex(8)}"
+            requests = [
+                {
+                    "createShape": {
+                        "objectId": object_id,
+                        "shapeType": shape_type,
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {
+                                "width": {"magnitude": width, "unit": "PT"},
+                                "height": {"magnitude": height, "unit": "PT"},
+                            },
+                            "transform": {
+                                "scaleX": 1,
+                                "scaleY": 1,
+                                "translateX": int(x * _PT_TO_EMU),
+                                "translateY": int(y * _PT_TO_EMU),
+                                "unit": "EMU",
+                            },
+                        },
+                    }
+                }
+            ]
+
+            if fill_color or border_color or border_weight is not None:
+                props = {}
+                fields = []
+                if fill_color:
+                    props["shapeBackgroundFill"] = {
+                        "solidFill": {
+                            "color": {"rgbColor": parse_hex_color(fill_color)}
+                        }
+                    }
+                    fields.append("shapeBackgroundFill.solidFill.color")
+                if border_color or border_weight is not None:
+                    outline = {}
+                    if border_color:
+                        outline["outlineFill"] = {
+                            "solidFill": {
+                                "color": {"rgbColor": parse_hex_color(border_color)}
+                            }
+                        }
+                    if border_weight is not None:
+                        outline["weight"] = {
+                            "magnitude": border_weight,
+                            "unit": "PT",
+                        }
+                    props["outline"] = outline
+                    fields.append("outline")
+                requests.append(
+                    {
+                        "updateShapeProperties": {
+                            "objectId": object_id,
+                            "shapeProperties": props,
+                            "fields": ",".join(fields),
+                        }
+                    }
+                )
+
+            if text:
+                requests.append(
+                    {
+                        "insertText": {
+                            "objectId": object_id,
+                            "insertionIndex": 0,
+                            "text": text,
+                        }
+                    }
+                )
+
+            self.slides_service.presentations().batchUpdate(
+                presentationId=presentation_id, body={"requests": requests}
+            ).execute()
+            return {
+                "presentation_id": presentation_id,
+                "slide_id": slide_id,
+                "shape_id": object_id,
+                "shape_type": shape_type,
+            }
+
+        return retry_on_429(_create)
+
+    def create_line(
+        self,
+        presentation_id,
+        slide_id,
+        start_x,
+        start_y,
+        end_x,
+        end_y,
+        line_category="STRAIGHT",
+        start_arrow=None,
+        end_arrow=None,
+        color=None,
+        weight=None,
+    ):
+        import secrets
+
+        from mcp_server.tools.common import parse_hex_color
+
+        def _create():
+            object_id = f"line_{secrets.token_hex(8)}"
+            dx = end_x - start_x
+            dy = end_y - start_y
+            requests = [
+                {
+                    "createLine": {
+                        "objectId": object_id,
+                        "lineCategory": line_category,
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {
+                                "width": {"magnitude": abs(dx), "unit": "PT"},
+                                "height": {"magnitude": abs(dy), "unit": "PT"},
+                            },
+                            "transform": {
+                                "scaleX": 1 if dx >= 0 else -1,
+                                "scaleY": 1 if dy >= 0 else -1,
+                                "translateX": int(start_x * _PT_TO_EMU),
+                                "translateY": int(start_y * _PT_TO_EMU),
+                                "unit": "EMU",
+                            },
+                        },
+                    }
+                }
+            ]
+
+            if start_arrow or end_arrow or color or weight is not None:
+                line_props = {}
+                fields = []
+                if start_arrow:
+                    line_props["startArrow"] = start_arrow
+                    fields.append("startArrow")
+                if end_arrow:
+                    line_props["endArrow"] = end_arrow
+                    fields.append("endArrow")
+                if color:
+                    line_props["lineFill"] = {
+                        "solidFill": {"color": {"rgbColor": parse_hex_color(color)}}
+                    }
+                    fields.append("lineFill.solidFill.color")
+                if weight is not None:
+                    line_props["weight"] = {"magnitude": weight, "unit": "PT"}
+                    fields.append("weight")
+                requests.append(
+                    {
+                        "updateLineProperties": {
+                            "objectId": object_id,
+                            "lineProperties": line_props,
+                            "fields": ",".join(fields),
+                        }
+                    }
+                )
+
+            self.slides_service.presentations().batchUpdate(
+                presentationId=presentation_id, body={"requests": requests}
+            ).execute()
+            return {
+                "presentation_id": presentation_id,
+                "slide_id": slide_id,
+                "line_id": object_id,
+                "line_category": line_category,
+            }
+
+        return retry_on_429(_create)
 
     def update_speaker_notes(self, presentation_id, slide_id, notes):
         def _update():

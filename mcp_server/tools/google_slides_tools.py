@@ -398,6 +398,50 @@ def _reorder_slides(
 
 _VALID_ALIGNMENTS_SLIDES = frozenset({"START", "CENTER", "END", "JUSTIFIED"})
 
+_VALID_SHAPE_TYPES = frozenset(
+    {
+        "TEXT_BOX",
+        "RECTANGLE",
+        "ROUND_RECTANGLE",
+        "ELLIPSE",
+        "DIAMOND",
+        "TRIANGLE",
+        "ARROW_EAST",
+        "ARROW_WEST",
+        "ARROW_NORTH",
+        "ARROW_SOUTH",
+        "PENTAGON",
+        "HEXAGON",
+        "OCTAGON",
+        "STAR_4",
+        "STAR_5",
+        "CLOUD",
+        "HEART",
+        "PLUS",
+        "RIBBON",
+        "FLOW_CHART_PROCESS",
+        "FLOW_CHART_DECISION",
+        "FLOW_CHART_TERMINATOR",
+    }
+)
+
+_VALID_LINE_CATEGORIES = frozenset({"STRAIGHT", "BENT", "CURVED"})
+
+_VALID_ARROW_STYLES = frozenset(
+    {
+        "NONE",
+        "STEALTH_ARROW",
+        "FILL_ARROW",
+        "FILL_CIRCLE",
+        "FILL_SQUARE",
+        "FILL_DIAMOND",
+        "OPEN_ARROW",
+        "OPEN_CIRCLE",
+        "OPEN_SQUARE",
+        "OPEN_DIAMOND",
+    }
+)
+
 
 def _update_text_style(
     service: GoogleSlidesService,
@@ -497,6 +541,146 @@ def _convert_markdown_to_slides(
         return error_response(str(e), "VALIDATION_ERROR")
     except Exception as e:
         return handle_api_error(e, "convert_markdown_to_slides")
+
+
+def _create_shape(
+    service: GoogleSlidesService,
+    presentation_id: str,
+    slide_id: str,
+    shape_type: str,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    text: str = "",
+    fill_color: str = "",
+    border_color: str = "",
+    border_weight: float | None = None,
+) -> str:
+    try:
+        validate_presentation_id(presentation_id)
+        validate_slide_id(slide_id)
+
+        shape_type = shape_type.upper()
+        if shape_type not in _VALID_SHAPE_TYPES:
+            return error_response(
+                f"shape_type must be one of: {', '.join(sorted(_VALID_SHAPE_TYPES))}",
+                "VALIDATION_ERROR",
+            )
+        if width <= 0 or height <= 0:
+            return error_response(
+                "width and height must be positive", "VALIDATION_ERROR"
+            )
+        if x < 0 or y < 0:
+            return error_response("x and y must be >= 0", "VALIDATION_ERROR")
+        if fill_color:
+            parse_hex_color(fill_color)
+        if border_color:
+            parse_hex_color(border_color)
+        if border_weight is not None and (border_weight <= 0 or border_weight > 50):
+            return error_response(
+                "border_weight must be between 0 and 50 PT", "VALIDATION_ERROR"
+            )
+
+        result = service.create_shape(
+            presentation_id,
+            slide_id,
+            shape_type,
+            x,
+            y,
+            width,
+            height,
+            text=text or None,
+            fill_color=fill_color or None,
+            border_color=border_color or None,
+            border_weight=border_weight,
+        )
+        logger.info(
+            "create_shape: %s slide=%s shape=%s",
+            presentation_id,
+            slide_id,
+            result["shape_id"],
+        )
+        return json.dumps(result)
+    except ValueError as e:
+        return error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return handle_api_error(e, "create_shape")
+
+
+def _create_line(
+    service: GoogleSlidesService,
+    presentation_id: str,
+    slide_id: str,
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    line_category: str = "STRAIGHT",
+    start_arrow: str = "",
+    end_arrow: str = "",
+    color: str = "",
+    weight: float | None = None,
+) -> str:
+    try:
+        validate_presentation_id(presentation_id)
+        validate_slide_id(slide_id)
+
+        line_category = line_category.upper()
+        if line_category not in _VALID_LINE_CATEGORIES:
+            return error_response(
+                f"line_category must be one of: {', '.join(sorted(_VALID_LINE_CATEGORIES))}",
+                "VALIDATION_ERROR",
+            )
+        if start_x < 0 or start_y < 0 or end_x < 0 or end_y < 0:
+            return error_response("coordinates must be >= 0", "VALIDATION_ERROR")
+        if start_x == end_x and start_y == end_y:
+            return error_response("line must have non-zero length", "VALIDATION_ERROR")
+        if start_arrow:
+            start_arrow = start_arrow.upper()
+            if start_arrow not in _VALID_ARROW_STYLES:
+                return error_response(
+                    f"start_arrow must be one of: {', '.join(sorted(_VALID_ARROW_STYLES))}",
+                    "VALIDATION_ERROR",
+                )
+        if end_arrow:
+            end_arrow = end_arrow.upper()
+            if end_arrow not in _VALID_ARROW_STYLES:
+                return error_response(
+                    f"end_arrow must be one of: {', '.join(sorted(_VALID_ARROW_STYLES))}",
+                    "VALIDATION_ERROR",
+                )
+        if color:
+            parse_hex_color(color)
+        if weight is not None and (weight <= 0 or weight > 50):
+            return error_response(
+                "weight must be between 0 and 50 PT", "VALIDATION_ERROR"
+            )
+
+        result = service.create_line(
+            presentation_id,
+            slide_id,
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            line_category=line_category,
+            start_arrow=start_arrow or None,
+            end_arrow=end_arrow or None,
+            color=color or None,
+            weight=weight,
+        )
+        logger.info(
+            "create_line: %s slide=%s line=%s",
+            presentation_id,
+            slide_id,
+            result["line_id"],
+        )
+        return json.dumps(result)
+    except ValueError as e:
+        return error_response(str(e), "VALIDATION_ERROR")
+    except Exception as e:
+        return handle_api_error(e, "create_line")
 
 
 def register_google_slides_tools(
@@ -607,4 +791,64 @@ def register_google_slides_tools(
             title,
             folder_id,
             template_name,
+        )
+
+    @mcp.tool()
+    def create_shape(
+        presentation_id: str,
+        slide_id: str,
+        shape_type: str,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        text: str = "",
+        fill_color: str = "",
+        border_color: str = "",
+        border_weight: float | None = None,
+    ) -> str:
+        """Create a shape on a slide. Positions and sizes in PT. shape_type: TEXT_BOX, RECTANGLE, ROUND_RECTANGLE, ELLIPSE, DIAMOND, TRIANGLE, ARROW_EAST, PENTAGON, HEXAGON, FLOW_CHART_PROCESS, FLOW_CHART_DECISION, etc. Optional fill_color/border_color as '#RRGGBB'. Returns the shape_id for later reference."""
+        return _create_shape(
+            service,
+            presentation_id,
+            slide_id,
+            shape_type,
+            x,
+            y,
+            width,
+            height,
+            text,
+            fill_color,
+            border_color,
+            border_weight,
+        )
+
+    @mcp.tool()
+    def create_line(
+        presentation_id: str,
+        slide_id: str,
+        start_x: float,
+        start_y: float,
+        end_x: float,
+        end_y: float,
+        line_category: str = "STRAIGHT",
+        start_arrow: str = "",
+        end_arrow: str = "",
+        color: str = "",
+        weight: float | None = None,
+    ) -> str:
+        """Create a line or arrow on a slide. Coordinates in PT. line_category: STRAIGHT, BENT, CURVED. Arrow styles: NONE, STEALTH_ARROW, FILL_ARROW, OPEN_ARROW, FILL_CIRCLE, FILL_DIAMOND, etc. Optional color as '#RRGGBB'. Returns the line_id for later reference."""
+        return _create_line(
+            service,
+            presentation_id,
+            slide_id,
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            line_category,
+            start_arrow,
+            end_arrow,
+            color,
+            weight,
         )
