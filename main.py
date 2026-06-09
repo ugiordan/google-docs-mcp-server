@@ -146,7 +146,24 @@ def main():
         from mcp_server.main import create_server
 
         mcp = create_server()
-        mcp.run(transport="stdio")
+
+        transport = "stdio"
+        run_kwargs = {}
+        if "--transport" in sys.argv:
+            idx = sys.argv.index("--transport")
+            if idx + 1 < len(sys.argv):
+                transport = sys.argv[idx + 1]
+        if transport in ("http", "streamable-http"):
+            port = 8081
+            if "--port" in sys.argv:
+                pi = sys.argv.index("--port")
+                if pi + 1 < len(sys.argv):
+                    port = int(sys.argv[pi + 1])
+            run_kwargs["host"] = "0.0.0.0"  # nosec B104
+            run_kwargs["port"] = port
+            transport = "streamable-http"
+
+        mcp.run(transport=transport, **run_kwargs)
 
 
 if __name__ == "__main__":
