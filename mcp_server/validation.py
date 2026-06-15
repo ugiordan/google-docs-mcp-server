@@ -133,6 +133,16 @@ def validate_shape_id(shape_id: str) -> bool:
     return True
 
 
+def validate_spreadsheet_id(spreadsheet_id: str) -> bool:
+    if not spreadsheet_id:
+        raise ValueError("Spreadsheet ID cannot be empty")
+    if not _ID_PATTERN.match(spreadsheet_id):
+        raise ValueError(
+            "Invalid spreadsheet ID format: must be 10-100 alphanumeric characters, hyphens, or underscores"
+        )
+    return True
+
+
 def validate_mime_type(mime_type: str) -> bool:
     if not mime_type:
         raise ValueError("MIME type cannot be empty")
