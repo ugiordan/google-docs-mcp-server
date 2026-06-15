@@ -71,7 +71,39 @@ def create_server() -> FastMCP:
         service = GoogleDocsService(creds)
 
     # Create MCP server
-    mcp = FastMCP(name="google-docs-mcp")
+    mcp = FastMCP(
+        name="google-docs-mcp",
+        instructions="""\
+Google Workspace MCP server for Docs, Slides, and Sheets.
+
+## Tool selection guide
+
+### Google Docs: choosing the right update tool
+- **convert_markdown_to_doc**: Create a NEW styled document from markdown. Use for initial document creation.
+- **update_document_markdown**: REPLACE content of an existing doc (or tab) with styled markdown. Full heading/bold/table/list formatting. Use when you need to restyle or rewrite a section.
+- **update_document**: Insert or replace PLAIN TEXT only. No formatting. Mode 'append' adds to end, 'replace' clears and rewrites. Use for quick text additions where styling doesn't matter.
+- **find_replace_document**: Find and replace specific text strings. Preserves ALL existing formatting and comments. Use for targeted edits to existing content without touching styles.
+- **insert_table_rows**: Add rows to existing tables. Use table_index (0-based) and after_row (0=after header, -1=append).
+- **update_doc_text_style**: Apply formatting (bold, italic, font, color, alignment) to a range WITHOUT changing text content.
+
+### Common mistakes to avoid
+1. Do NOT use update_document(mode='append') when you need styled content. Use update_document_markdown instead.
+2. Do NOT use update_document_markdown to add a single line. Use find_replace_document to insert text at a known anchor point.
+3. Do NOT use update_doc_text_style on the entire document when you only want to style one paragraph. Always specify start_index/end_index.
+4. When editing existing styled documents, prefer find_replace_document over update_document_markdown. find_replace preserves all formatting and comments.
+
+### Google Slides
+- **read_presentation**: Always read first to get slide_id and shape_id values before modifying.
+- **create_shape**: Create rectangles, ellipses, text boxes, etc. Positions in PT. Returns shape_id.
+- **create_line**: Create lines/arrows between points. Coordinates in PT. Returns line_id.
+- **update_slide_text**: Replace text in an existing shape. Preserves original style.
+
+### Google Sheets
+- **read_spreadsheet**: Read all sheets or a specific range (A1 notation like 'Sheet1!A1:C10').
+- **update_cells**: Write to specific cells. Values as JSON array of arrays. Supports formulas (=SUM...).
+- **append_rows**: Add rows after the last row with data.\
+""",
+    )
 
     # Create nonce manager for delete confirmations
     nonce_manager = NonceManager(ttl_seconds=30)
